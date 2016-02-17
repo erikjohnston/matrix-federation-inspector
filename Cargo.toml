@@ -1,0 +1,13 @@
+[package]
+authors = ["Erik Johnston"]
+name = "rust-matrix-test-federation"
+version = "0.1.0"
+
+[dependencies]
+ansi_term = "0.7.2"
+dns-parser = "0.3.0"
+ip = "1.1.0"
+prettytable-rs = "0.6.1"
+quick-error = "1.0.0"
+rand = "0.3.14"
+resolv-conf = "0.3.0"
