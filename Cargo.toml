@@ -6,10 +6,13 @@ version = "0.1.0"
 [dependencies]
 ansi_term = "0.7.2"
 dns-parser = "0.3.0"
-hyper = "0.7.2"
 ip = "1.1.0"
-openssl = "0.7.6"
 prettytable-rs = "0.6.1"
 quick-error = "1.0.0"
 rand = "0.3.14"
 resolv-conf = "0.3.0"
+rustc-serialize = "0.3.18"
+
+[dependencies.openssl]
+version = "0.7.6"
+features = ["tlsv1_1", "tlsv1_2"]
