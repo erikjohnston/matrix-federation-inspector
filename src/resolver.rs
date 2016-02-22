@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use std::iter::IntoIterator;
 use std::net::UdpSocket;
 use rand::Rng;
+use itertools::Itertools;
 
 quick_error! {
     #[derive(Debug)]
@@ -76,6 +77,12 @@ fn load_answers(
                 host_to_ips.entry(answer.name.to_string())
                     .or_insert(vec![])
                     .push(ip::IpAddr::V4(ip));
+                changed = true;
+            }
+            dns_parser::RRData::AAAA(ip) => {
+                host_to_ips.entry(answer.name.to_string())
+                    .or_insert(vec![])
+                    .push(ip::IpAddr::V6(ip));
                 changed = true;
             }
             dns_parser::RRData::CNAME(name) => {
@@ -181,23 +188,31 @@ pub fn resolve_matrix_srv(server_name: &String, nameserver: &ip::IpAddr)
 
         hosts_to_resolve.len() > 0
     } {
-        let mut buf2 = [0u8; 4096];
+        let mut changed = false;
 
-        let id = rand::thread_rng().gen();
-        let mut builder = dns_parser::Builder::new_query(id, true);
-        for host in &hosts_to_resolve {
+        let types : [dns_parser::QueryType; 2] = [dns_parser::QueryType::A, dns_parser::QueryType::AAAA];
+        for (qtype, host) in types.iter().cartesian_product(hosts_to_resolve.iter()) {
+            let mut buf2 = [0u8; 4096];
+
+            let id = rand::thread_rng().gen();
+            let mut builder = dns_parser::Builder::new_query(id, true);
+
             builder.add_question(
                 &host[..],
-                dns_parser::QueryType::A,
+                *qtype,
                 dns_parser::QueryClass::IN
             );
-        }
-        let query = builder.build().unwrap();
-        let packet = send_query(&mut buf2, nameserver, &query[..]).unwrap();
 
-        let mut changed = false;
-        changed |= load_answers(&mut host_to_ips, &mut cname_to_host, &packet.answers);
-        changed |= load_answers(&mut host_to_ips, &mut cname_to_host, &packet.additional);
+            let query = builder.build().unwrap();
+            let packet = send_query(&mut buf2, nameserver, &query[..]).unwrap();
+
+            if packet.header.response_code != dns_parser::ResponseCode::NoError {
+                return Err(ResolveError::SrvDnsFailure(packet.header.response_code));
+            }
+
+            changed |= load_answers(&mut host_to_ips, &mut cname_to_host, &packet.answers);
+            changed |= load_answers(&mut host_to_ips, &mut cname_to_host, &packet.additional);
+        }
 
         if !changed {
             return Err(ResolveError::HostResolveFailure(hosts_to_resolve.clone()));
@@ -219,3 +234,6 @@ pub fn resolve_matrix_srv(server_name: &String, nameserver: &ip::IpAddr)
 
     Ok(srv_results)
 }
+
+
+// pub fn resolve_a(hosts: &Vec<u8>) -> Result<

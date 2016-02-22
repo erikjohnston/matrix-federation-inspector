@@ -1,6 +1,7 @@
 extern crate ansi_term;
 extern crate dns_parser;
 extern crate ip;
+extern crate itertools;
 extern crate openssl;
 extern crate rand;
 extern crate resolv_conf;
@@ -22,6 +23,7 @@ use openssl::ssl::{SslContext, SslStream, SslMethod, Ssl};
 use openssl::ssl::error::SslError;
 use openssl::crypto::hash::Type as HashType;
 use rustc_serialize::hex::ToHex;
+use std::error::Error;
 // use std::slice::SliceConcatExt;
 
 
@@ -30,9 +32,12 @@ quick_error!{
     pub enum SslStreamError {
         Io(err: std::io::Error) {
             from()
+            description(err.description())
+            display("I/O error: {}", err)
         }
         Ssl(err: SslError) {
             from()
+            description(err.description())
         }
     }
 }
@@ -115,7 +120,7 @@ fn main() {
     let mut table = Table::new();
 
     table.add_row(row![
-        "priority", "weight", "target", "port", "ip"
+        "priority", "weight", "port", "target", "ip"
     ]);
 
     for srv_result in &srv_results {
@@ -148,39 +153,56 @@ fn main() {
         }
     }
 
-    let mut table = Table::new();
-
-    table.add_row(row![
+    let mut conn_table = Table::new();
+    conn_table.add_row(row![
         "IP", "Port", "Certificate", "Cipher Name", "Version", "Bits"
     ]);
 
+    let mut err_table = Table::new();
+    err_table.add_row(row![
+        "IP", "Port", "Error"
+    ]);
+
     for (ip, port) in ip_ports {
-        let conn_info = get_ssl_info(
+        match get_ssl_info(
             &server_name,
             *ip,
             port,
-        ).unwrap();
+        ) {
+            Ok(conn_info) => {
+                let split_fingerprint = {
+                    let s = conn_info.cert_sha256.chunks(8)
+                        .map(|chunk| chunk.to_hex().to_uppercase())
+                        .collect::<Vec<String>>()
+                        .join("\n");
+                    s
+                };
 
-        let split_fingerprint = {
-            let s = conn_info.cert_sha256.chunks(8)
-                .map(|chunk| chunk.to_hex().to_uppercase())
-                .collect::<Vec<String>>()
-                .join("\n");
-            s
-        };
+                conn_table.add_row(Row::new(vec![
+                    Cell::new(&conn_info.ip.to_string()).style_spec("Fgb"),
+                    Cell::new(&conn_info.port.to_string()),
+                    Cell::new(&split_fingerprint),
+                    Cell::new(conn_info.cipher_name),
+                    Cell::new(conn_info.cipher_version),
+                    Cell::new(&conn_info.cipher_bits.to_string()),
+                ]));
+            }
+            Err(e) => {
+                err_table.add_row(Row::new(vec![
+                    Cell::new(&ip.to_string()).style_spec("Frb"),
+                    Cell::new(&port.to_string()),
+                    Cell::new(&format!("{}", e)),
+                ]));
+            }
+        }
 
-        table.add_row(Row::new(vec![
-            Cell::new(&conn_info.ip.to_string()),
-            Cell::new(&conn_info.port.to_string()),
-            Cell::new(&split_fingerprint),
-            Cell::new(conn_info.cipher_name),
-            Cell::new(conn_info.cipher_version),
-            Cell::new(&conn_info.cipher_bits.to_string()),
-        ]));
     }
 
 
-    table.printstd();
+    conn_table.printstd();
+    println!("");
+
+    err_table.printstd();
     println!("");
 
     println!(
