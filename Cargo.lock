@@ -3,10 +3,10 @@ name = "rust-matrix-test-federation"
 version = "0.1.0"
 dependencies = [
  "ansi_term 0.7.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "dns-parser 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "dns-parser 0.3.0 (git+https://github.com/tailhook/dns-parser.git)",
  "ip 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "itertools 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
- "openssl 0.7.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "openssl 0.7.6 (git+https://github.com/erikjohnston/rust-openssl.git?rev=conninfo)",
  "prettytable-rs 0.6.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.3.14 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -42,7 +42,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "dns-parser"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
+source = "git+https://github.com/tailhook/dns-parser.git#485d8ad0b33b540208a75af9954894a3cc890957"
 dependencies = [
  "byteorder 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "ip 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -108,20 +108,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "openssl"
 version = "0.7.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
+source = "git+https://github.com/erikjohnston/rust-openssl.git?rev=conninfo#0b580dde8366d110fb7eff856f42f0fd7c7d2a00"
 dependencies = [
  "bitflags 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "gcc 0.3.24 (registry+https://github.com/rust-lang/crates.io-index)",
  "lazy_static 0.1.15 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.7 (registry+https://github.com/rust-lang/crates.io-index)",
- "openssl-sys 0.7.6 (registry+https://github.com/rust-lang/crates.io-index)",
- "openssl-sys-extras 0.7.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "openssl-sys 0.7.6 (git+https://github.com/erikjohnston/rust-openssl.git?rev=conninfo)",
+ "openssl-sys-extras 0.7.6 (git+https://github.com/erikjohnston/rust-openssl.git?rev=conninfo)",
 ]
 
 [[package]]
 name = "openssl-sys"
 version = "0.7.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
+source = "git+https://github.com/erikjohnston/rust-openssl.git?rev=conninfo#0b580dde8366d110fb7eff856f42f0fd7c7d2a00"
 dependencies = [
  "gdi32-sys 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.7 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -133,11 +133,11 @@ dependencies = [
 [[package]]
 name = "openssl-sys-extras"
 version = "0.7.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
+source = "git+https://github.com/erikjohnston/rust-openssl.git?rev=conninfo#0b580dde8366d110fb7eff856f42f0fd7c7d2a00"
 dependencies = [
  "gcc 0.3.24 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.7 (registry+https://github.com/rust-lang/crates.io-index)",
- "openssl-sys 0.7.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "openssl-sys 0.7.6 (git+https://github.com/erikjohnston/rust-openssl.git?rev=conninfo)",
 ]
 
 [[package]]

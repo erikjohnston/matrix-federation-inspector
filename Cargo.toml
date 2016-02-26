@@ -5,7 +5,6 @@ version = "0.1.0"
 
 [dependencies]
 ansi_term = "0.7.2"
-dns-parser = "0.3.0"
 ip = "1.1.0"
 itertools = "0.4.8"
 prettytable-rs = "0.6.1"
@@ -14,6 +13,10 @@ rand = "0.3.14"
 resolv-conf = "0.3.0"
 rustc-serialize = "0.3.18"
 
+[dependencies.dns-parser]
+git = "https://github.com/tailhook/dns-parser.git"
+
 [dependencies.openssl]
 features = ["tlsv1_1", "tlsv1_2"]
-version = "0.7.6"
+git = "https://github.com/erikjohnston/rust-openssl.git"
+rev = "conninfo"

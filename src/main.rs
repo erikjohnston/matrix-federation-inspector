@@ -85,7 +85,13 @@ fn main() {
     f.read_to_end(&mut buf).unwrap();
     let cfg = resolv_conf::Config::parse(&buf[..]).unwrap();
 
-    let server_name = "jki.re".to_string();
+    let args: Vec<String> = std::env::args().collect();
+
+    if args.len() != 2 {
+        panic!("Expected single string argument <server_name>");
+    }
+
+    let server_name = args[1].to_string();
 
     println!("\nTesting configuration of {}.\n\n----\n", server_name);
     println!("Resolving SRV records...");
