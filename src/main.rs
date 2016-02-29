@@ -18,6 +18,7 @@ use prettytable::cell::Cell;
 use std::io::{Read};
 use std::fs::File;
 use std::net::TcpStream;
+use ansi_term::Style;
 use ansi_term::Colour::{Red, Green};
 use openssl::ssl::{SslContext, SslStream, SslMethod, Ssl};
 use openssl::ssl::error::SslError;
@@ -96,48 +97,107 @@ fn main() {
     println!("\nTesting configuration of {}.\n\n----\n", server_name);
     println!("Resolving SRV records...");
 
-    let srv_results = match resolver::resolve_matrix_srv(&server_name, &cfg.nameservers[0]) {
-        Ok(res) => res,
-        Err(resolver::ResolveError::DnsError(e)) => {
-            println!(
-                "{}: DNS Error: {}",
-                Red.bold().paint("FAILURE"), e
-            );
-            return;
-        }
-        Err(resolver::ResolveError::SrvDnsFailure(e)) => {
-            println!(
-                "{}: NameServer responded to SRV request with: '{:?}'",
-                Red.bold().paint("FAILURE"), e
-            );
-            return;
-        }
-        Err(resolver::ResolveError::HostResolveFailure(hosts)) => {
-            for host in hosts {
-                println!(
-                    "{}: Failed to resolve: {}",
-                    Red.bold().paint("FAILURE"), host
-                );
+    let srv_results_map = resolver::resolve(
+        &cfg.nameservers[0],
+        resolver::ResolveRequestType::SRV, "_matrix._tcp.".to_string() + &server_name
+    );
+
+    println!("Done.\n");
+
+    for (target, result) in &srv_results_map.srv_map {
+        println!("{}", Style::new().bold().paint(&target[..]));
+        match result {
+            &Ok(ref srv_results) => {
+                let mut table = Table::new();
+
+                table.add_row(row![
+                    "priority", "weight", "port", "target"
+                ]);
+
+                for srv_result in srv_results {
+                    table.add_row(Row::new(vec![
+                        Cell::new(&srv_result.priority.to_string()),
+                        Cell::new(&srv_result.weight.to_string()),
+                        Cell::new(&srv_result.port.to_string()),
+                        Cell::new(&srv_result.target),
+                    ]));
+                }
+
+                table.printstd();
+                println!("");
             }
-            return;
+            &Err(ref e) => {
+                println!(
+                    "{}: DNS Error: {}",
+                    Red.bold().paint("FAILURE"), e
+                );
+                return;
+            }
         }
-    };
+    }
+
+    if !srv_results_map.cname_map.is_empty() {
+        println!("{}:", Style::new().bold().paint("CNAMEs"));
+
+        let mut table = Table::new();
+
+        table.add_row(row![
+            "name", "target"
+        ]);
+
+        for (name, result) in &srv_results_map.cname_map {
+            match result {
+                &Ok(ref targets) => {
+                    for target in targets {
+                        table.add_row(Row::new(vec![
+                            Cell::new(&name),
+                            Cell::new(target),
+                        ]));
+                    }
+                }
+                &Err(ref e) => {
+                    println!(
+                        "{}: DNS Error: {}",
+                        Red.bold().paint("FAILURE"), e
+                    );
+                    return;
+                }
+            }
+        }
+
+        table.printstd();
+        println!("");
+    }
+
+    println!("{}:", Style::new().bold().paint("Hosts"));
 
     let mut table = Table::new();
 
     table.add_row(row![
-        "priority", "weight", "port", "target", "ip"
+        "Host", "IP"
     ]);
 
-    for srv_result in &srv_results {
-        for ip in &srv_result.ips {
-            table.add_row(Row::new(vec![
-                Cell::new(&srv_result.priority.to_string()),
-                Cell::new(&srv_result.weight.to_string()),
-                Cell::new(&srv_result.port.to_string()),
-                Cell::new(&srv_result.target),
-                Cell::new(&ip.to_string()),
-            ]));
+    for (name, result) in &srv_results_map.host_map {
+        match result {
+            &Ok(ref targets) => {
+                for target in targets {
+                    table.add_row(Row::new(vec![
+                        Cell::new(&name),
+                        Cell::new(&format!("{}", target)),
+                    ]));
+                }
+            }
+            &Err(ref e) => {
+                println!(
+                    "{}: DNS Error: {}",
+                    Red.bold().paint("FAILURE"), e
+                );
+
+                table.add_row(Row::new(vec![
+                    Cell::new(&name),
+                    Cell::new(&format!("DNS Error: {}", e)).style_spec("Fr"),
+                ]));
+            }
         }
     }
 
@@ -148,6 +208,14 @@ fn main() {
         "{}: Resolved domain.\n\n----\n",
         Green.bold().paint("SUCCESS"),
     );
+
+
+    let srv_results : Vec<resolver::ResolvedSrvResult> = srv_results_map.srv_map
+        .values()
+        .flat_map(|v| v)
+        .flat_map(|v| v.iter())
+        .map(|v| v.resolve_from_maps(&srv_results_map))
+        .collect();
 
     println!("Testing TLS connections...");
 
@@ -205,11 +273,16 @@ fn main() {
     }
 
 
-    conn_table.printstd();
-    println!("");
+    // Headers count as a row.
+    if conn_table.len() > 1 {
+        conn_table.printstd();
+        println!("");
+    }
 
-    err_table.printstd();
-    println!("");
+    if err_table.len() > 1 {
+        err_table.printstd();
+        println!("");
+    }
 
     println!(
         "{}: Connected to all associated IPs.\n\n----\n",

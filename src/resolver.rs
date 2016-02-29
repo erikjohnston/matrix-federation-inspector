@@ -1,24 +1,31 @@
 
 use dns_parser;
+use dns_parser::{QueryType, QueryClass, RRData};
 use ip;
 use rand;
 
 use std;
+use std::error::Error;
 use std::collections::BTreeMap;
 use std::iter::IntoIterator;
 use std::net::UdpSocket;
 use rand::Rng;
-use itertools::Itertools;
+
 
 quick_error! {
     #[derive(Debug)]
     pub enum DnsIoError {
         Io(err: std::io::Error) {
             from()
+            description(err.description())
+            display("IoError: {}", err)
         }
         Parser(err: dns_parser::Error) {
             from()
+            description(err.description())
+            display("ParserError: {}", err)
         }
+        UnexpectedPacket
     }
 }
 
@@ -27,9 +34,13 @@ quick_error! {
     pub enum ResolveError {
         DnsError(err: DnsIoError) {
             from()
+            description(err.description())
+            display("DnsError: {}", err)
         }
-        SrvDnsFailure(rcode: dns_parser::ResponseCode) {}
-        HostResolveFailure(ip: Vec<String>) {}
+        DnsServerFailure(rcode: dns_parser::ResponseCode) {
+            description("NameServer responded with error")
+            display(x) -> ("DnsServerFailure: {}, rcode: {:?}", x.description(), rcode)
+        }
     }
 }
 
@@ -39,11 +50,55 @@ pub struct SrvResult {
     pub weight: u16,
     pub port: u16,
     pub target: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedSrvResult {
+    pub priority: u16,
+    pub weight: u16,
+    pub port: u16,
+    pub target: String,
     pub ips: Vec<ip::IpAddr>,
 }
 
-fn send_query<'a>(buf: &'a mut [u8], nameserver: &ip::IpAddr, query: &[u8])
+
+impl SrvResult {
+    pub fn resolve_from_maps(&self, maps: &ResolveResultMap) -> ResolvedSrvResult {
+        let mut result_ips = Vec::new();
+
+        let mut queued_targets = vec![&self.target];
+
+        while let Some(target) = queued_targets.pop() {
+            if let Some(&Ok(ref ips)) = maps.host_map.get(target) {
+                result_ips.extend(ips.iter());
+            }
+            if let Some(&Ok(ref new_target)) = maps.cname_map.get(target) {
+                queued_targets.extend(new_target.iter());
+            }
+        }
+
+        ResolvedSrvResult {
+            priority: self.priority,
+            weight: self.weight,
+            port: self.port,
+            target: self.target.clone(),
+            ips: result_ips,
+        }
+    }
+}
+
+
+fn send_query<'a>(buf: &'a mut [u8], nameserver: &ip::IpAddr, query_type: QueryType, host: &str)
 -> Result<dns_parser::Packet<'a>, DnsIoError> {
+    let id = rand::thread_rng().gen();
+    let mut builder = dns_parser::Builder::new_query(id, true);
+    builder.add_question(
+        host,
+        query_type,
+        QueryClass::IN
+    );
+    let query = builder.build().unwrap();
+
     let socket = match nameserver {
         &ip::IpAddr::V4(addr) => {
             let socket = try!(UdpSocket::bind("0.0.0.0:0"));
@@ -61,179 +116,180 @@ fn send_query<'a>(buf: &'a mut [u8], nameserver: &ip::IpAddr, query: &[u8])
 
     let packet = try!(dns_parser::Packet::parse(&buf[..size]));
 
+    if packet.header.id != id {
+        return Err(DnsIoError::UnexpectedPacket);
+    }
+
     Ok(packet)
 }
 
 
-fn load_answers(
-    host_to_ips: &mut BTreeMap<String, Vec<ip::IpAddr>>,
-    cname_to_host: &mut BTreeMap<String, String>,
-    answers: &Vec<dns_parser::ResourceRecord>,
-) -> bool {
-    let mut changed = false;
-    for answer in answers {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ResolveRequestType {
+    SRV, Host,
+}
+
+
+#[derive(Debug)]
+pub struct ResolveResultMap {
+    pub srv_map: BTreeMap<String, Result<Vec<SrvResult>, ResolveError>>,
+    pub cname_map: BTreeMap<String, Result<Vec<String>, ResolveError>>,
+    pub host_map: BTreeMap<String, Result<Vec<ip::IpAddr>, ResolveError>>,
+}
+
+
+pub fn resolve(nameserver: &ip::IpAddr, rtype: ResolveRequestType, target: String)
+    -> ResolveResultMap
+{
+    let mut pending_queries = Vec::new();
+    match rtype {
+        ResolveRequestType::SRV => {
+            pending_queries.push((QueryType::SRV, target));
+        }
+        ResolveRequestType::Host => {
+            pending_queries.push((QueryType::A, target.clone()));
+            pending_queries.push((QueryType::AAAA, target));
+        }
+    }
+
+    let mut srv_result_map = BTreeMap::new();
+    let mut cname_result_map = BTreeMap::new();
+    let mut host_result_map = BTreeMap::new();
+
+    let mut buf = [0u8; 4096];
+
+    while let Some((qtype, target)) = pending_queries.pop() {
+        let res = resolve_internal(nameserver, &mut buf, qtype, &target[..]);
+        match res {
+            Ok(rtype_map) => {
+                let ResolveResultMapInternal{srv_map, cname_map, host_map} = rtype_map;
+
+                // The following block works out of we need to continue resolving
+                // anything, e.g. CNAMEs
+                {
+                    let target_srv_iter = srv_map.values()
+                        .flat_map(|r| r.iter())
+                        .map(|r| &r.target);
+
+                    let target_cname_iter = cname_map.values()
+                        .flat_map(|r| r.iter());
+
+                    for target in target_srv_iter.chain(target_cname_iter) {
+                        if host_map.contains_key(target) {
+                            continue;
+                        } else if host_result_map.contains_key(target) {
+                            continue;
+                        } else if cname_map.contains_key(target) {
+                            continue;
+                        } else if cname_result_map.contains_key(target) {
+                            continue;
+                        }
+
+                        pending_queries.push((QueryType::A, target.clone()));
+                        pending_queries.push((QueryType::AAAA, target.clone()));
+                    }
+                }
+
+                // Update each map one by one. If we find one that is in an error
+                // state we *don't* clobber
+
+                for (k, vec) in srv_map {
+                    let entry = srv_result_map.entry(k).or_insert_with(|| Ok(Vec::new()));
+                    if let &mut Ok(ref mut curr_vec) = entry {
+                        curr_vec.extend(vec.into_iter());
+                    }
+                }
+
+                for (k, vec) in cname_map {
+                    let entry = cname_result_map.entry(k).or_insert_with(|| Ok(Vec::new()));
+                    if let &mut Ok(ref mut curr_vec) = entry {
+                        curr_vec.extend(vec.into_iter());
+                    }
+                }
+
+                for (k, vec) in host_map {
+                    let entry = host_result_map.entry(k).or_insert_with(|| Ok(Vec::new()));
+                    if let &mut Ok(ref mut curr_vec) = entry {
+                        curr_vec.extend(vec.into_iter());
+                    }
+                }
+            }
+            Err(e) => {
+                match qtype {
+                    QueryType::A | QueryType::AAAA => {
+                        host_result_map.insert(target, Err(e));
+                    }
+                    QueryType::SRV => {
+                        srv_result_map.insert(target, Err(e));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    ResolveResultMap {
+        srv_map: srv_result_map,
+        cname_map: cname_result_map,
+        host_map: host_result_map,
+    }
+}
+
+
+struct ResolveResultMapInternal {
+    pub srv_map: BTreeMap<String, Vec<SrvResult>>,
+    pub cname_map: BTreeMap<String, Vec<String>>,
+    pub host_map: BTreeMap<String, Vec<ip::IpAddr>>,
+}
+
+
+fn resolve_internal(nameserver: &ip::IpAddr, buf: &mut [u8], qtype: QueryType, target: &str)
+    -> Result<ResolveResultMapInternal, ResolveError>
+{
+    let packet = try!(send_query(buf, nameserver, qtype, target));
+
+    if packet.header.response_code != dns_parser::ResponseCode::NoError {
+        return Err(ResolveError::DnsServerFailure(packet.header.response_code));
+    }
+
+    let mut srv_map = BTreeMap::new();
+    let mut cname_map = BTreeMap::new();
+    let mut host_map = BTreeMap::new();
+
+    for answer in packet.answers {
         match answer.data {
-            dns_parser::RRData::A(ip) => {
-                host_to_ips.entry(answer.name.to_string())
-                    .or_insert(vec![])
+            RRData::A(ip) => {
+                host_map.entry(answer.name.to_string())
+                    .or_insert_with(|| Vec::new())
                     .push(ip::IpAddr::V4(ip));
-                changed = true;
             }
-            dns_parser::RRData::AAAA(ip) => {
-                host_to_ips.entry(answer.name.to_string())
-                    .or_insert(vec![])
+            RRData::AAAA(ip) => {
+                host_map.entry(answer.name.to_string())
+                    .or_insert_with(|| Vec::new())
                     .push(ip::IpAddr::V6(ip));
-                changed = true;
             }
-            dns_parser::RRData::CNAME(name) => {
-                cname_to_host.insert(answer.name.to_string(), name.to_string());
-                changed = true;
+            RRData::CNAME(name) => {
+                cname_map.entry(answer.name.to_string())
+                    .or_insert_with(|| Vec::new())
+                    .push(name.to_string());
+            }
+            RRData::SRV{priority, weight, port, target} => {
+                srv_map.entry(answer.name.to_string())
+                    .or_insert_with(|| Vec::new())
+                    .push(SrvResult {
+                        priority: priority,
+                        weight: weight,
+                        port: port,
+                        target: target.to_string(),
+                    });
             }
             _ => {}
         }
     }
 
-    changed
+    Ok(ResolveResultMapInternal {
+        srv_map: srv_map,
+        cname_map: cname_map,
+        host_map: host_map,
+    })
 }
-
-fn get_unresolved_hosts<'a, U>(
-    host_to_ips: &BTreeMap<String, Vec<ip::IpAddr>>,
-    cname_to_host: &BTreeMap<String, String>,
-    unresolved: &mut Vec<String>,
-    hosts: U,
-) where U: Iterator<Item=&'a String> {
-    for host in hosts {
-        if host_to_ips.contains_key(host) {
-            continue;
-        } else if let Some(cname) = cname_to_host.get(host) {
-            get_unresolved_hosts(
-                host_to_ips, cname_to_host, unresolved, Some(cname).into_iter()
-            );
-        } else {
-            unresolved.push(host.clone());
-        }
-    }
-}
-
-fn get_resolved_hosts<'a, U>(
-    host_to_ips: &BTreeMap<String, Vec<ip::IpAddr>>,
-    cname_to_host: &BTreeMap<String, String>,
-    resolved: &mut BTreeMap<String, Vec<ip::IpAddr>>,
-    hosts: U,
-) where U: Iterator<Item=&'a String> {
-    for host in hosts {
-        if let Some(ip) = host_to_ips.get(host) {
-            resolved.insert(host.clone(), ip.clone());
-        } else if let Some(cname) = cname_to_host.get(host) {
-            get_resolved_hosts(
-                host_to_ips, cname_to_host, resolved, Some(cname).into_iter()
-            );
-        }
-    }
-}
-
-
-pub fn resolve_matrix_srv(server_name: &String, nameserver: &ip::IpAddr)
--> Result<Vec<SrvResult>, ResolveError> {
-    let srv_host = "_matrix._tcp.".to_string() + server_name;
-
-    let mut buf = [0u8; 4096];
-    let packet = {
-        let id = rand::thread_rng().gen();
-        let mut builder = dns_parser::Builder::new_query(id, true);
-        builder.add_question(
-            &srv_host[..],
-            dns_parser::QueryType::SRV,
-            dns_parser::QueryClass::IN
-        );
-        let query = builder.build().unwrap();
-        send_query(&mut buf, nameserver, &query[..]).unwrap()
-    };
-
-    if packet.header.response_code != dns_parser::ResponseCode::NoError {
-        return Err(ResolveError::SrvDnsFailure(packet.header.response_code));
-    }
-
-    let mut srv_results = vec![];
-    for answer in packet.answers {
-        if let dns_parser::RRData::SRV{ priority, weight, port, target } = answer.data {
-            srv_results.push(SrvResult{
-                priority: priority,
-                weight: weight,
-                port: port,
-                target: target.to_string(),
-                ips: vec![],
-            });
-        } else {
-            panic!("Unexpected response: {:#?}", answer);
-        }
-    }
-
-    let mut host_to_ips = BTreeMap::new();
-    let mut cname_to_host = BTreeMap::new();
-
-    // TODO: Currently the dns parser doesn't parse additional sections.
-    load_answers(&mut host_to_ips, &mut cname_to_host, &packet.additional);
-
-    let mut hosts_to_resolve = vec![];
-    while {
-        hosts_to_resolve.clear();
-
-        get_unresolved_hosts(
-            &host_to_ips,
-            &cname_to_host,
-            &mut hosts_to_resolve,
-            srv_results.iter().map(|s| &s.target),
-        );
-
-        hosts_to_resolve.len() > 0
-    } {
-        let mut changed = false;
-
-        let types : [dns_parser::QueryType; 2] = [dns_parser::QueryType::A, dns_parser::QueryType::AAAA];
-        for (qtype, host) in types.iter().cartesian_product(hosts_to_resolve.iter()) {
-            let mut buf2 = [0u8; 4096];
-
-            let id = rand::thread_rng().gen();
-            let mut builder = dns_parser::Builder::new_query(id, true);
-
-            builder.add_question(
-                &host[..],
-                *qtype,
-                dns_parser::QueryClass::IN
-            );
-
-            let query = builder.build().unwrap();
-            let packet = send_query(&mut buf2, nameserver, &query[..]).unwrap();
-
-            if packet.header.response_code != dns_parser::ResponseCode::NoError {
-                return Err(ResolveError::SrvDnsFailure(packet.header.response_code));
-            }
-
-            changed |= load_answers(&mut host_to_ips, &mut cname_to_host, &packet.answers);
-            changed |= load_answers(&mut host_to_ips, &mut cname_to_host, &packet.additional);
-        }
-
-        if !changed {
-            return Err(ResolveError::HostResolveFailure(hosts_to_resolve.clone()));
-        }
-    }
-
-    let mut resolved = BTreeMap::new();
-
-    get_resolved_hosts(
-        &host_to_ips,
-        &cname_to_host,
-        &mut resolved,
-        srv_results.iter().map(|s| &s.target),
-    );
-
-    for srv_result in &mut srv_results {
-        srv_result.ips = resolved[&srv_result.target].clone();
-    }
-
-    Ok(srv_results)
-}
-
-
-// pub fn resolve_a(hosts: &Vec<u8>) -> Result<
