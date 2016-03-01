@@ -23,6 +23,7 @@ use ansi_term::Colour::{Red, Green};
 use openssl::ssl::{SslContext, SslStream, SslMethod, Ssl};
 use openssl::ssl::error::SslError;
 use openssl::crypto::hash::Type as HashType;
+use openssl::nid::Nid;
 use rustc_serialize::hex::ToHex;
 use std::error::Error;
 // use std::slice::SliceConcatExt;
@@ -43,15 +44,22 @@ quick_error!{
     }
 }
 
+#[derive(Debug, Clone)]
+struct CertificateInfo {
+    cert_sha256: Vec<u8>,
+    common_name: String,
+}
+
 
 #[derive(Debug, Clone)]
 struct ConnectionInfo {
     ip: ip::IpAddr,
     port: u16,
-    cert_sha256: Vec<u8>,
+    server_name: String,
     cipher_name: &'static str,
     cipher_version: &'static str,
     cipher_bits: i32,
+    cert_info: CertificateInfo,
 }
 
 fn get_ssl_info(server_name: &String, ipaddr: ip::IpAddr, port: u16) -> Result<ConnectionInfo, SslStreamError> {
@@ -67,14 +75,21 @@ fn get_ssl_info(server_name: &String, ipaddr: ip::IpAddr, port: u16) -> Result<C
 
     let peer_cert = ssl_stream.ssl().peer_certificate().unwrap();
     let cipher = ssl_stream.ssl().get_current_cipher().unwrap();
+    let server_name = ssl_stream.ssl().get_servername().unwrap();
+
+    let common_name = peer_cert.subject_name().text_by_nid(Nid::CN).unwrap().to_string();
 
     Ok(ConnectionInfo{
         ip: ipaddr,
         port: port,
-        cert_sha256: peer_cert.fingerprint(HashType::SHA256).unwrap(),
         cipher_name: cipher.name(),
         cipher_version: ssl_stream.ssl().version(),
-        cipher_bits: cipher.bits().0,
+        cipher_bits: cipher.bits().secret,
+        server_name: server_name,
+        cert_info: CertificateInfo{
+            common_name: common_name,
+            cert_sha256: peer_cert.fingerprint(HashType::SHA256).unwrap(),
+        }
     })
 }
 
@@ -229,7 +244,7 @@ fn main() {
 
     let mut conn_table = Table::new();
     conn_table.add_row(row![
-        "IP", "Port", "Certificate", "Cipher Name", "Version", "Bits"
+        "IP", "Port", "Name", "Certificate", "Cipher Name", "Version", "Bits"
     ]);
 
     let mut err_table = Table::new();
@@ -245,7 +260,7 @@ fn main() {
         ) {
             Ok(conn_info) => {
                 let split_fingerprint = {
-                    let s = conn_info.cert_sha256.chunks(8)
+                    let s = conn_info.cert_info.cert_sha256.chunks(8)
                         .map(|chunk| chunk.to_hex().to_uppercase())
                         .collect::<Vec<String>>()
                         .join("\n");
@@ -255,6 +270,7 @@ fn main() {
                 conn_table.add_row(Row::new(vec![
                     Cell::new(&conn_info.ip.to_string()).style_spec("Fgb"),
                     Cell::new(&conn_info.port.to_string()),
+                    Cell::new(&conn_info.server_name),
                     Cell::new(&split_fingerprint),
                     Cell::new(conn_info.cipher_name),
                     Cell::new(conn_info.cipher_version),
