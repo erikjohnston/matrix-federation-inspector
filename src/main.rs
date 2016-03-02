@@ -166,7 +166,6 @@ fn main() {
 
     let server_name = args[1].to_string();
 
-    println!("\nTesting configuration of {}.\n\n----\n", server_name);
     println!("Resolving SRV records...");
 
     let srv_results_map = resolver::resolve(
@@ -276,11 +275,6 @@ fn main() {
     table.printstd();
     println!("");
 
-    println!(
-        "{}: Resolved domain.\n\n----\n",
-        Green.bold().paint("SUCCESS"),
-    );
-
 
     let srv_results : Vec<resolver::ResolvedSrvResult> = srv_results_map.srv_map
         .values()
@@ -289,7 +283,7 @@ fn main() {
         .map(|v| v.resolve_from_maps(&srv_results_map))
         .collect();
 
-    println!("Testing TLS connections...");
+    println!("Testing TLS connections...\n");
 
     let mut ip_ports = vec![]; // Vec<(ip::IpAddr, u16)>
 
@@ -394,11 +388,6 @@ fn main() {
         cert_table.printstd();
         println!("");
     }
-
-    println!(
-        "{}: Connected to all associated IPs.\n\n----\n",
-        Green.bold().paint("SUCCESS"),
-    );
 
 
     if !server_responses.is_empty() {
