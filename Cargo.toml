@@ -22,5 +22,4 @@ git = "https://github.com/tailhook/dns-parser.git"
 
 [dependencies.openssl]
 features = ["tlsv1_1", "tlsv1_2"]
-git = "https://github.com/erikjohnston/rust-openssl.git"
-rev = "conninfo"
+git = "https://github.com/sfackler/rust-openssl.git"
