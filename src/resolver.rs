@@ -6,7 +6,7 @@ use rand;
 
 use std;
 use std::error::Error;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::iter::IntoIterator;
 use std::net::UdpSocket;
 use rand::Rng;
@@ -44,7 +44,7 @@ quick_error! {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SrvResult {
     pub priority: u16,
     pub weight: u16,
@@ -132,9 +132,9 @@ pub enum ResolveRequestType {
 
 #[derive(Debug)]
 pub struct ResolveResultMap {
-    pub srv_map: BTreeMap<String, Result<Vec<SrvResult>, ResolveError>>,
-    pub cname_map: BTreeMap<String, Result<Vec<String>, ResolveError>>,
-    pub host_map: BTreeMap<String, Result<Vec<ip::IpAddr>, ResolveError>>,
+    pub srv_map: BTreeMap<String, Result<HashSet<SrvResult>, ResolveError>>,
+    pub cname_map: BTreeMap<String, Result<HashSet<String>, ResolveError>>,
+    pub host_map: BTreeMap<String, Result<HashSet<ip::IpAddr>, ResolveError>>,
 }
 
 
@@ -185,8 +185,12 @@ pub fn resolve(nameserver: &ip::IpAddr, rtype: ResolveRequestType, target: Strin
                             continue;
                         }
 
-                        pending_queries.push((QueryType::A, target.clone()));
-                        pending_queries.push((QueryType::AAAA, target.clone()));
+                        if !pending_queries.contains(&(QueryType::A, target.clone())) {
+                            pending_queries.push((QueryType::A, target.clone()));
+                        }
+                        if !pending_queries.contains(&(QueryType::AAAA, target.clone())) {
+                            pending_queries.push((QueryType::AAAA, target.clone()));
+                        }
                     }
                 }
 
@@ -194,21 +198,21 @@ pub fn resolve(nameserver: &ip::IpAddr, rtype: ResolveRequestType, target: Strin
                 // state we *don't* clobber
 
                 for (k, vec) in srv_map {
-                    let entry = srv_result_map.entry(k).or_insert_with(|| Ok(Vec::new()));
+                    let entry = srv_result_map.entry(k).or_insert_with(|| Ok(HashSet::new()));
                     if let &mut Ok(ref mut curr_vec) = entry {
                         curr_vec.extend(vec.into_iter());
                     }
                 }
 
                 for (k, vec) in cname_map {
-                    let entry = cname_result_map.entry(k).or_insert_with(|| Ok(Vec::new()));
+                    let entry = cname_result_map.entry(k).or_insert_with(|| Ok(HashSet::new()));
                     if let &mut Ok(ref mut curr_vec) = entry {
                         curr_vec.extend(vec.into_iter());
                     }
                 }
 
                 for (k, vec) in host_map {
-                    let entry = host_result_map.entry(k).or_insert_with(|| Ok(Vec::new()));
+                    let entry = host_result_map.entry(k).or_insert_with(|| Ok(HashSet::new()));
                     if let &mut Ok(ref mut curr_vec) = entry {
                         curr_vec.extend(vec.into_iter());
                     }
@@ -237,9 +241,9 @@ pub fn resolve(nameserver: &ip::IpAddr, rtype: ResolveRequestType, target: Strin
 
 
 struct ResolveResultMapInternal {
-    pub srv_map: BTreeMap<String, Vec<SrvResult>>,
-    pub cname_map: BTreeMap<String, Vec<String>>,
-    pub host_map: BTreeMap<String, Vec<ip::IpAddr>>,
+    pub srv_map: BTreeMap<String, HashSet<SrvResult>>,
+    pub cname_map: BTreeMap<String, HashSet<String>>,
+    pub host_map: BTreeMap<String, HashSet<ip::IpAddr>>,
 }
 
 
@@ -260,23 +264,23 @@ fn resolve_internal(nameserver: &ip::IpAddr, buf: &mut [u8], qtype: QueryType, t
         match answer.data {
             RRData::A(ip) => {
                 host_map.entry(answer.name.to_string())
-                    .or_insert_with(|| Vec::new())
-                    .push(ip::IpAddr::V4(ip));
+                    .or_insert_with(|| HashSet::new())
+                    .insert(ip::IpAddr::V4(ip));
             }
             RRData::AAAA(ip) => {
                 host_map.entry(answer.name.to_string())
-                    .or_insert_with(|| Vec::new())
-                    .push(ip::IpAddr::V6(ip));
+                    .or_insert_with(|| HashSet::new())
+                    .insert(ip::IpAddr::V6(ip));
             }
             RRData::CNAME(name) => {
                 cname_map.entry(answer.name.to_string())
-                    .or_insert_with(|| Vec::new())
-                    .push(name.to_string());
+                    .or_insert_with(|| HashSet::new())
+                    .insert(name.to_string());
             }
             RRData::SRV{priority, weight, port, target} => {
                 srv_map.entry(answer.name.to_string())
-                    .or_insert_with(|| Vec::new())
-                    .push(SrvResult {
+                    .or_insert_with(|| HashSet::new())
+                    .insert(SrvResult {
                         priority: priority,
                         weight: weight,
                         port: port,

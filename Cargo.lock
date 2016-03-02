@@ -7,7 +7,7 @@ dependencies = [
  "dns-parser 0.3.0 (git+https://github.com/tailhook/dns-parser.git)",
  "hyper 0.7.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "ip 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "itertools 0.4.8 (registry+https://github.com/rust-lang/crates.io-index)",
+ "itertools 0.4.10 (registry+https://github.com/rust-lang/crates.io-index)",
  "openssl 0.7.6 (git+https://github.com/sfackler/rust-openssl.git)",
  "prettytable-rs 0.6.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "quick-error 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -81,7 +81,7 @@ dependencies = [
 
 [[package]]
 name = "gcc"
-version = "0.3.24"
+version = "0.3.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
@@ -133,7 +133,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "itertools"
-version = "0.4.8"
+version = "0.4.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
@@ -209,7 +209,7 @@ version = "0.7.6"
 source = "git+https://github.com/sfackler/rust-openssl.git#2fe3e48487843dc55bb70b252aefd02459cd273a"
 dependencies = [
  "bitflags 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "gcc 0.3.24 (registry+https://github.com/rust-lang/crates.io-index)",
+ "gcc 0.3.25 (registry+https://github.com/rust-lang/crates.io-index)",
  "lazy_static 0.1.15 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "openssl-sys 0.7.6 (git+https://github.com/sfackler/rust-openssl.git)",
@@ -222,7 +222,7 @@ version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "bitflags 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
- "gcc 0.3.24 (registry+https://github.com/rust-lang/crates.io-index)",
+ "gcc 0.3.25 (registry+https://github.com/rust-lang/crates.io-index)",
  "lazy_static 0.1.15 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "openssl-sys 0.7.6 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -237,7 +237,7 @@ dependencies = [
  "gdi32-sys 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "libressl-pnacl-sys 2.1.6 (registry+https://github.com/rust-lang/crates.io-index)",
- "pkg-config 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "pkg-config 0.3.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "user32-sys 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -249,7 +249,7 @@ dependencies = [
  "gdi32-sys 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "libressl-pnacl-sys 2.1.6 (registry+https://github.com/rust-lang/crates.io-index)",
- "pkg-config 0.3.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "pkg-config 0.3.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "user32-sys 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -258,7 +258,7 @@ name = "openssl-sys-extras"
 version = "0.7.6"
 source = "git+https://github.com/sfackler/rust-openssl.git#2fe3e48487843dc55bb70b252aefd02459cd273a"
 dependencies = [
- "gcc 0.3.24 (registry+https://github.com/rust-lang/crates.io-index)",
+ "gcc 0.3.25 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "openssl-sys 0.7.6 (git+https://github.com/sfackler/rust-openssl.git)",
 ]
@@ -268,14 +268,14 @@ name = "openssl-sys-extras"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
- "gcc 0.3.24 (registry+https://github.com/rust-lang/crates.io-index)",
+ "gcc 0.3.25 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "openssl-sys 0.7.6 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
 name = "pkg-config"
-version = "0.3.6"
+version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
