@@ -276,12 +276,16 @@ fn main() {
     println!("");
 
 
-    let srv_results : Vec<resolver::ResolvedSrvResult> = srv_results_map.srv_map
+    let mut srv_results : Vec<resolver::ResolvedSrvResult> = srv_results_map.srv_map
         .values()
         .flat_map(|v| v)
         .flat_map(|v| v.iter())
         .map(|v| v.resolve_from_maps(&srv_results_map))
         .collect();
+
+    srv_results.sort_by_key(
+        |srv: &resolver::ResolvedSrvResult| (srv.priority, !srv.weight)
+    );
 
     println!("Testing TLS connections...\n");
 
