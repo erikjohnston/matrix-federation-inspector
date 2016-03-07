@@ -4,7 +4,7 @@ version = "0.1.0"
 dependencies = [
  "ansi_term 0.7.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "chrono 0.2.19 (registry+https://github.com/rust-lang/crates.io-index)",
- "dns-parser 0.3.0 (git+https://github.com/tailhook/dns-parser.git)",
+ "dns-parser 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "hyper 0.7.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "ip 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "itertools 0.4.10 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -70,13 +70,12 @@ dependencies = [
 
 [[package]]
 name = "dns-parser"
-version = "0.3.0"
-source = "git+https://github.com/tailhook/dns-parser.git#485d8ad0b33b540208a75af9954894a3cc890957"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "byteorder 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "ip 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "matches 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "quick-error 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "quick-error 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
