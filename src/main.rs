@@ -287,15 +287,14 @@ fn main() {
         |srv: &resolver::ResolvedSrvResult| (srv.priority, !srv.weight)
     );
 
+    let ip_ports : Vec<(ip::IpAddr, u16)> = srv_results.iter()
+        .map(|s| (s.ips.iter(), s.port))
+        .flat_map(
+            |(ips, port)| ips.map(move |ip| (*ip, port))
+        )
+        .collect();
+
     println!("Testing TLS connections...\n");
-
-    let mut ip_ports = vec![]; // Vec<(ip::IpAddr, u16)>
-
-    for srv_result in &srv_results {
-        for ip in &srv_result.ips {
-            ip_ports.push((ip, srv_result.port));
-        }
-    }
 
     let mut conn_table = Table::new();
     conn_table.add_row(row![
@@ -313,7 +312,7 @@ fn main() {
     for (ip, port) in ip_ports {
         match get_ssl_info(
             &server_name,
-            *ip,
+            ip,
             port,
         ) {
             Ok((conn_info, server_response)) => {
@@ -401,8 +400,8 @@ fn main() {
 
         server_table.add_row(row![
             "IP/Port", &match ip {
-                &ip::IpAddr::V4(ref ipv4) => format!("{}:{}", ipv4, port),
-                &ip::IpAddr::V6(ref ipv6) => format!("[{}]:{}", ipv6, port),
+                ip::IpAddr::V4(ref ipv4) => format!("{}:{}", ipv4, port),
+                ip::IpAddr::V6(ref ipv6) => format!("[{}]:{}", ipv6, port),
             }
         ]);
 
