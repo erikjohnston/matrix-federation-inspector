@@ -339,7 +339,7 @@ fn main() {
                     Cell::new(&conn_info.cipher_bits.to_string()),
                 ]));
 
-                server_responses.push(server_response);
+                server_responses.push(((ip, port), server_response));
             }
             Err(e) => {
                 err_table.add_row(Row::new(vec![
@@ -390,11 +390,17 @@ fn main() {
     }
 
 
-    if !server_responses.is_empty() {
-        let server_response = server_responses.pop().unwrap();
+    for ((ip, port), server_response) in server_responses {
         let val : Value = serde_json::from_slice(&server_response.body).unwrap();
 
         let mut server_table = Table::new();
+
+        server_table.add_row(row![
+            "IP/Port", &match ip {
+                &ip::IpAddr::V4(ref ipv4) => format!("{}:{}", ipv4, port),
+                &ip::IpAddr::V6(ref ipv6) => format!("[{}]:{}", ipv6, port),
+            }
+        ]);
 
         let sn = val.find("server_name").and_then(|v| v.as_string()).unwrap_or("");
         server_table.add_row(row![
