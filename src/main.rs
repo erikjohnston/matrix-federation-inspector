@@ -434,7 +434,7 @@ fn main() {
 
         for (key, value) in verify_keys {
             server_table.add_row(row![
-                "Verify key ", &format!("{}: {}", key, value)
+                "Verify key ", &format!("{} {}", key, value)
             ]);
         }
 
