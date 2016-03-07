@@ -276,23 +276,26 @@ fn main() {
     println!("");
 
 
-    let mut srv_results : Vec<resolver::ResolvedSrvResult> = srv_results_map.srv_map
-        .values()
-        .flat_map(|v| v)
-        .flat_map(|v| v.iter())
-        .map(|v| v.resolve_from_maps(&srv_results_map))
-        .collect();
+    let ip_ports : Vec<(ip::IpAddr, u16)> = {
+        let mut srv_results : Vec<resolver::ResolvedSrvResult> = srv_results_map.srv_map
+            .values()  // -> iter of Result<HashSet<SrvResult>, ResolveError>
+            .flat_map(|v| v) // -> iter of HashSet<SrvResult>
+            .flat_map(|v| v.iter())  // -> iter of SrvResult
+            .map(|v| v.resolve_from_maps(&srv_results_map))  // -> iter of ResolvedSrvResult
+            .collect();
 
-    srv_results.sort_by_key(
-        |srv: &resolver::ResolvedSrvResult| (srv.priority, !srv.weight)
-    );
+        // Sort based on priority and weight
+        srv_results.sort_by_key(
+            |srv: &resolver::ResolvedSrvResult| (srv.priority, !srv.weight)
+        );
 
-    let ip_ports : Vec<(ip::IpAddr, u16)> = srv_results.iter()
-        .map(|s| (s.ips.iter(), s.port))
-        .flat_map(
-            |(ips, port)| ips.map(move |ip| (*ip, port))
-        )
-        .collect();
+        srv_results.iter()
+            .map(|s| (s.ips.iter(), s.port))
+            .flat_map(
+                |(ips, port)| ips.map(move |ip| (*ip, port))
+            )
+            .collect()
+    };
 
     println!("Testing TLS connections...\n");
 
