@@ -62,30 +62,7 @@ pub struct SrvResult {
     pub target: String,
 }
 
-#[derive(Debug, Clone)]
-pub struct ResolvedSrvResult {
-    pub priority: u16,
-    pub weight: u16,
-    pub port: u16,
-    pub target: String,
-    pub ips: Vec<ip::IpAddr>,
-}
-
-
-impl SrvResult {
-    pub fn resolve_from_maps(&self, maps: &ResolveResultMap) -> ResolvedSrvResult{
-        ResolvedSrvResult {
-            priority: self.priority,
-            weight: self.weight,
-            port: self.port,
-            target: self.target.clone(),
-            ips: resolve_target_to_ip(&self.target, maps),
-        }
-    }
-}
-
-
-pub fn resolve_target_to_ip(target: &str, maps: &ResolveResultMap) -> Vec<ip::IpAddr> {
+pub fn resolve_target_to_ips(target: &str, maps: &ResolveResultMap) -> Vec<ip::IpAddr> {
     let mut result_ips = Vec::new();
 
     let mut queued_targets = vec![target];

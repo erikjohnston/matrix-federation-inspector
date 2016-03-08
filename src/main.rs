@@ -180,22 +180,16 @@ fn main() {
     };
 
     let ip_ports : Vec<(ip::IpAddr, u16)> = if !was_soa_response {
-        let mut srv_results : Vec<resolver::ResolvedSrvResult> = srv_results_map.srv_map
+        srv_results_map.srv_map
             .values()  // -> iter of Result<HashSet<SrvResult>, ResolveError>
             .flat_map(|result| result) // -> iter of HashSet<SrvResult>
             .flat_map(|srv_results_set| srv_results_set.iter())  // -> iter of SrvResult
-            .map(|v| v.resolve_from_maps(&srv_results_map))  // -> iter of ResolvedSrvResult
-            .collect();
-
-        // Sort based on priority and weight
-        srv_results.sort_by_key(
-            |srv: &resolver::ResolvedSrvResult| (srv.priority, !srv.weight)
-        );
-
-        srv_results.iter()
-            .map(|s| (s.ips.iter(), s.port))
+            .map(|srv_result| (
+                resolver::resolve_target_to_ips(&srv_result.target, &srv_results_map),
+                srv_result.port,
+            ))  // -> (Vec<IpAddr>, port)
             .flat_map(
-                |(ips, port)| ips.map(move |ip| (*ip, port))
+                |(ips, port)| ips.into_iter().map(move |ip| (ip, port))
             )
             .collect()
     } else {
@@ -204,7 +198,7 @@ fn main() {
             resolver::ResolveRequestType::Host, server_name.clone()
         );
 
-        let ips = resolver::resolve_target_to_ip(&server_name, &srv_results_map);
+        let ips = resolver::resolve_target_to_ips(&server_name, &srv_results_map);
 
         ips.into_iter().map(|ip| (ip, 8448)).collect()
     };
