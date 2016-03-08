@@ -44,6 +44,16 @@ quick_error! {
     }
 }
 
+impl ResolveError {
+    pub fn is_name_error(&self) -> bool {
+        match self {
+            &ResolveError::DnsServerFailure(dns_parser::ResponseCode::NameError) => true,
+            _ => false
+        }
+    }
+}
+
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SrvResult {
     pub priority: u16,
@@ -63,28 +73,33 @@ pub struct ResolvedSrvResult {
 
 
 impl SrvResult {
-    pub fn resolve_from_maps(&self, maps: &ResolveResultMap) -> ResolvedSrvResult {
-        let mut result_ips = Vec::new();
-
-        let mut queued_targets = vec![&self.target];
-
-        while let Some(target) = queued_targets.pop() {
-            if let Some(&Ok(ref ips)) = maps.host_map.get(target) {
-                result_ips.extend(ips.iter());
-            }
-            if let Some(&Ok(ref new_target)) = maps.cname_map.get(target) {
-                queued_targets.extend(new_target.iter());
-            }
-        }
-
+    pub fn resolve_from_maps(&self, maps: &ResolveResultMap) -> ResolvedSrvResult{
         ResolvedSrvResult {
             priority: self.priority,
             weight: self.weight,
             port: self.port,
             target: self.target.clone(),
-            ips: result_ips,
+            ips: resolve_target_to_ip(&self.target, maps),
         }
     }
+}
+
+
+pub fn resolve_target_to_ip(target: &str, maps: &ResolveResultMap) -> Vec<ip::IpAddr> {
+    let mut result_ips = Vec::new();
+
+    let mut queued_targets = vec![target];
+
+    while let Some(target) = queued_targets.pop() {
+        if let Some(&Ok(ref ips)) = maps.host_map.get(target) {
+            result_ips.extend(ips.iter());
+        }
+        if let Some(&Ok(ref new_target)) = maps.cname_map.get(target) {
+            queued_targets.extend(new_target.iter().map(|s| s as &str));
+        }
+    }
+
+    return result_ips;
 }
 
 
