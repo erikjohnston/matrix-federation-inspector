@@ -15,7 +15,7 @@ extern crate serde_json;
 
 mod resolver;
 
-use std::collections::HashSet;
+use std::collections::{HashSet, BTreeMap};
 use std::fmt::Display;
 use std::io::{Read};
 use std::fs::File;
@@ -199,7 +199,11 @@ fn print_table<'a, 'b, C, Q, T, E, F>(collection: C, header: Row, mut func: F)
 }
 
 
-fn resolve(server_name: String, nameservers: &[ip::IpAddr], report_full: bool) {
+#[derive(Debug, Clone, Copy)]
+enum ResolveOutput { Simple, Full, Graph }
+
+
+fn resolve(server_name: String, nameservers: &[ip::IpAddr], output: ResolveOutput) {
     let srv_name = "_matrix._tcp.".to_string() + &server_name;
 
     let mut srv_results_map = resolver::resolve(
@@ -241,59 +245,114 @@ fn resolve(server_name: String, nameservers: &[ip::IpAddr], report_full: bool) {
         ips.into_iter().map(|ip| (String::new(), String::new(), 8448, ip)).collect_vec()
     };
 
-    if report_full {
-        println!("{}...", Style::new().bold().paint("SRV Records"));
+    match output {
+        ResolveOutput::Full => {
+            println!("{}...", Style::new().bold().paint("SRV Records"));
 
-        print_table(
-            &srv_results_map.srv_map,
-            row!["Query", "Priority", "Weight", "Port", "Target"],
-            |query, srv_results| srv_results.iter().map(|srv_result| Row::new(vec![
-                Cell::new(&query),
-                Cell::new(&srv_result.priority.to_string()),
-                Cell::new(&srv_result.weight.to_string()),
-                Cell::new(&srv_result.port.to_string()),
-                Cell::new(&srv_result.target),
-            ])).collect_vec()
-        );
+            print_table(
+                &srv_results_map.srv_map,
+                row!["Query", "Priority", "Weight", "Port", "Target"],
+                |query, srv_results| srv_results.iter().map(|srv_result| Row::new(vec![
+                    Cell::new(&query),
+                    Cell::new(&srv_result.priority.to_string()),
+                    Cell::new(&srv_result.weight.to_string()),
+                    Cell::new(&srv_result.port.to_string()),
+                    Cell::new(&srv_result.target),
+                ])).collect_vec()
+            );
 
-        println!("{}...", Style::new().bold().paint("Hosts"));
+            println!("{}...", Style::new().bold().paint("Hosts"));
 
-        print_table(
-            &srv_results_map.host_map,
-            row!["Host", "Target"],
-            |query, host_results| host_results.iter().map(|host_result| match host_result {
-                &resolver::HostResult::CNAME(ref target) => {
-                    Row::new(vec![
-                        Cell::new(&query),
-                        Cell::new(&target),
-                    ])
-                }
-                &resolver::HostResult::IP(ref ip) => {
-                    Row::new(vec![
-                        Cell::new(&query),
-                        Cell::new(&format!("{}", ip)),
-                    ])
-                }
-            }).collect_vec()
-        );
-    } else {
-        if ip_ports.is_empty() {
-            println!("Failed to resolve");
-            return;
+            print_table(
+                &srv_results_map.host_map,
+                row!["Host", "Target"],
+                |query, host_results| host_results.iter().map(|host_result| match host_result {
+                    &resolver::HostResult::CNAME(ref target) => {
+                        Row::new(vec![
+                            Cell::new(&query),
+                            Cell::new(&target),
+                        ])
+                    }
+                    &resolver::HostResult::IP(ref ip) => {
+                        Row::new(vec![
+                            Cell::new(&query),
+                            Cell::new(&format!("{}", ip)),
+                        ])
+                    }
+                }).collect_vec()
+            );
         }
+        ResolveOutput::Simple => {
+            if ip_ports.is_empty() {
+                println!("Failed to resolve");
+                std::process::exit(1);
+            }
 
-        let mut table = table!(["IP", "Priority", "Weight", "Port"]);
+            let mut table = table!(["IP", "Port"]);
 
-        for (priority, weight, port, ip) in ip_ports {
-            table.add_row(Row::new(vec![
-                Cell::new(&format!("{}", ip)),
-                Cell::new(&format!("{}", priority)),
-                Cell::new(&format!("{}", weight)),
-                Cell::new(&format!("{}", port)),
-            ]));
+            for (_, _, port, ip) in ip_ports {
+                table.add_row(Row::new(vec![
+                    Cell::new(&format!("{}", ip)),
+                    Cell::new(&format!("{}", port)),
+                ]));
+            }
+
+            table.printstd();
         }
+        ResolveOutput::Graph => {
+            let mut nodes = BTreeMap::new();
+            let mut edges = Vec::new();
 
-        table.printstd();
+            for (query, result) in &srv_results_map.srv_map {
+                match result {
+                    &Ok(ref srv_results) => {
+                        let srv_label = format!("{} (SRV)", &query);
+                        nodes.insert(query.clone(), srv_label);
+
+                        for srv_result in srv_results {
+                            let label = format!("{} {}", &srv_result.target, srv_result.port);
+
+                            nodes.insert(srv_result.target.clone(), label);
+                            edges.push((query.clone(), srv_result.target.clone()))
+                        }
+                    }
+                    &Err(ref e) => {
+                        let name = format!("{}-error", query);
+                        nodes.insert(name.clone(), format!("{}", e));
+                        edges.push((query.clone(), name))
+                    }
+                }
+            }
+
+            for (query, result) in &srv_results_map.host_map {
+                match result {
+                    &Ok(ref host_results) => {
+                        for host_result in host_results {
+                            let host = format!("{}", host_result);
+                            nodes.insert(host.clone(), host.clone());
+                            edges.push((query.clone(), host))
+                        }
+                    }
+                    &Err(ref e) => {
+                        let name = format!("{}-error", query);
+                        nodes.insert(name.clone(), format!("{}", e));
+                        edges.push((query.clone(), name))
+                    }
+                }
+            }
+
+            println!("digraph dns {{");
+
+            for (name, label) in nodes {
+                println!("\t\"{}\" [label=\"{}\"];", name, label);
+            }
+
+            for (start, end) in edges {
+                println!("\t\"{}\" -> \"{}\";", start, end);
+            }
+
+            println!("}}");
+        }
     }
 }
 
@@ -562,6 +621,14 @@ fn main() {
                 .long("full")
                 .help("Return each resolution step, including errors.")
                 .required(false)
+                .conflicts_with("graph")
+            )
+            .arg(Arg::with_name("graph")
+                .short("g")
+                .long("graph")
+                .help("Output each resolution step in DOT format.")
+                .required(false)
+                .conflicts_with("full")
             )
         )
         .get_matches();
@@ -584,9 +651,15 @@ fn main() {
         }
         ("resolve", Some(submatches)) => {
             let server_name = submatches.value_of("server_name").unwrap().to_string();
-            let resovle_full = submatches.is_present("full");
+            let resolve_output = if submatches.is_present("full") {
+                ResolveOutput::Full
+            } else if submatches.is_present("graph") {
+                ResolveOutput::Graph
+            } else {
+                ResolveOutput::Simple
+            };
 
-            resolve(server_name, &nameservers, resovle_full);
+            resolve(server_name, &nameservers, resolve_output);
         }
         _ => {}
     }
