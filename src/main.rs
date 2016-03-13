@@ -20,6 +20,7 @@ use prettytable::cell::Cell;
 use prettytable::format::consts::FORMAT_CLEAN;
 
 use std::collections::HashSet;
+use std::fmt::Display;
 use std::io::{Read};
 use std::fs::File;
 use std::net::TcpStream;
@@ -40,7 +41,7 @@ use hyper::net::HttpStream;
 use hyper::header::{Host, Headers, Server};
 use hyper::method::Method;
 use serde_json::Value;
-
+use itertools::Itertools;
 
 
 quick_error!{
@@ -151,6 +152,42 @@ fn get_ssl_info(server_name: &String, ipaddr: ip::IpAddr, port: u16)
 }
 
 
+fn print_table<'a, 'b, C, Q, T, E, F>(collection: C, header: Row, mut func: F)
+    where C: IntoIterator<Item=(Q, &'a Result<T, E>)>, E: Error + 'a, T: 'a, Q: 'a + Display, 'a: 'b,
+    F: FnMut(Q, &'b T) -> Vec<Row>
+{
+    let mut sucess_table = Table::new();
+    sucess_table.add_row(header);
+
+    let mut failure_table = table!(["Query", "Error"]);
+
+    for (query, result) in collection {
+        match result {
+            &Ok(ref items) => {
+                for row in func(query, items) {
+                    sucess_table.add_row(row);
+                }
+            }
+            &Err(ref e) => {
+                failure_table.add_row(Row::new(vec![
+                    Cell::new(&format!("{}", query)).style_spec("Fr"),
+                    Cell::new(&format!("{}", e))
+                ]));
+            }
+        }
+    }
+
+    if sucess_table.len() > 1 {
+        sucess_table.printstd();
+        println!("");
+    }
+
+    if failure_table.len() > 1 {
+        failure_table.printstd();
+        println!("");
+    }
+}
+
 
 fn main() {
     let mut buf = Vec::with_capacity(4096);
@@ -205,108 +242,38 @@ fn main() {
 
     println!("{}...", Style::new().bold().paint("SRV Records"));
 
-    let mut srv_sucess_table = table!(["Query", "Priority", "Weight", "Port", "Target"]);
-    let mut srv_failure_table = table!(["Query", "Error"]);
+    print_table(
+        &srv_results_map.srv_map,
+        row!["Query", "Priority", "Weight", "Port", "Target"],
+        |query, srv_results| srv_results.iter().map(|srv_result| Row::new(vec![
+            Cell::new(&query),
+            Cell::new(&srv_result.priority.to_string()),
+            Cell::new(&srv_result.weight.to_string()),
+            Cell::new(&srv_result.port.to_string()),
+            Cell::new(&srv_result.target),
+        ])).collect_vec()
+    );
 
-    for (query, result) in &srv_results_map.srv_map {
-        match result {
-            &Ok(ref srv_results) => {
-                for srv_result in srv_results {
-                    srv_sucess_table.add_row(Row::new(vec![
-                        Cell::new(&query),
-                        Cell::new(&srv_result.priority.to_string()),
-                        Cell::new(&srv_result.weight.to_string()),
-                        Cell::new(&srv_result.port.to_string()),
-                        Cell::new(&srv_result.target),
-                    ]));
-                }
+    println!("{}...", Style::new().bold().paint("Hosts"));
+
+    print_table(
+        &srv_results_map.host_map,
+        row!["Host", "Target"],
+        |query, host_results| host_results.iter().map(|host_result| match host_result {
+            &resolver::HostResult::CNAME(ref target) => {
+                Row::new(vec![
+                    Cell::new(&query),
+                    Cell::new(&target),
+                ])
             }
-            &Err(ref e) => {
-                srv_failure_table.add_row(Row::new(vec![
-                    Cell::new(&query).style_spec("Fr"),
-                    Cell::new(&format!("{}", e))
-                ]));
+            &resolver::HostResult::IP(ref ip) => {
+                Row::new(vec![
+                    Cell::new(&query),
+                    Cell::new(&format!("{}", ip)),
+                ])
             }
-        }
-    }
-
-    if srv_sucess_table.len() > 1 {
-        srv_sucess_table.printstd();
-        println!("");
-    }
-
-    if srv_failure_table.len() > 1 {
-        srv_failure_table.printstd();
-        println!("");
-    }
-
-    println!("{}...", Style::new().bold().paint("CNAMEs"));
-
-    let mut cname_sucess_table = table!(["Name", "Target"]);
-    let mut cname_failure_table = table!(["Name", "Error"]);
-
-    for (query, result) in &srv_results_map.cname_map {
-        match result {
-            &Ok(ref targets) => {
-                for target in targets {
-                    cname_sucess_table.add_row(Row::new(vec![
-                        Cell::new(&query),
-                        Cell::new(&target),
-                    ]));
-                }
-            }
-            &Err(ref e) => {
-                cname_failure_table.add_row(Row::new(vec![
-                    Cell::new(&query).style_spec("Fr"),
-                    Cell::new(&format!("{}", e))
-                ]));
-            }
-        }
-    }
-
-    if cname_sucess_table.len() > 1 {
-        cname_sucess_table.printstd();
-        println!("");
-    }
-
-    if cname_failure_table.len() > 1 {
-        cname_failure_table.printstd();
-        println!("");
-    }
-
-    println!("{}....", Style::new().bold().paint("Hosts"));
-
-    let mut host_sucess_table = table!(["Host", "IP"]);
-    let mut host_failure_table = table!(["Host", "Error"]);
-
-    for (query, result) in &srv_results_map.host_map {
-        match result {
-            &Ok(ref targets) => {
-                for target in targets {
-                    host_sucess_table.add_row(Row::new(vec![
-                        Cell::new(&query),
-                        Cell::new(&format!("{}", target)),
-                    ]));
-                }
-            }
-            &Err(ref e) => {
-                host_failure_table.add_row(Row::new(vec![
-                    Cell::new(&query).style_spec("Fr"),
-                    Cell::new(&format!("{}", e))
-                ]));
-            }
-        }
-    }
-
-    if host_sucess_table.len() > 1 {
-        host_sucess_table.printstd();
-        println!("");
-    }
-
-    if host_failure_table.len() > 1 {
-        host_failure_table.printstd();
-        println!("");
-    }
+        }).collect_vec()
+    );
 
 
     if ip_ports.is_empty() {
@@ -339,13 +306,10 @@ fn main() {
             Ok((conn_info, server_response)) => {
                 certificates.insert(conn_info.cert_info.clone());
 
-                let split_fingerprint = {
-                    let s = conn_info.cert_info.cert_sha256.chunks(8)
-                        .map(|chunk| chunk.to_hex().to_uppercase())
-                        .collect::<Vec<String>>()
-                        .join("\n");
-                    s
-                };
+                let split_fingerprint = conn_info.cert_info.cert_sha256.chunks(8)
+                    .map(|chunk| chunk.to_hex().to_uppercase())
+                    .collect::<Vec<String>>()
+                    .join("\n");
 
                 // let val : Value = serde_json::from_slice(&server_response.body).unwrap();
                 // let sn = val.find("server_name").and_then(|v| v.as_string()).unwrap_or("");

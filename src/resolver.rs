@@ -68,11 +68,11 @@ pub fn resolve_target_to_ips(target: &str, maps: &ResolveResultMap) -> Vec<ip::I
     let mut queued_targets = vec![target];
 
     while let Some(target) = queued_targets.pop() {
-        if let Some(&Ok(ref ips)) = maps.host_map.get(target) {
-            result_ips.extend(ips.iter());
-        }
-        if let Some(&Ok(ref new_target)) = maps.cname_map.get(target) {
-            queued_targets.extend(new_target.iter().map(|s| s as &str));
+        if let Some(&Ok(ref results)) = maps.host_map.get(target) {
+            result_ips.extend(results.iter().filter_map(|r| r.as_ip().cloned()));
+            queued_targets.extend(
+                results.iter().filter_map(|r| r.as_cname()).map(|string| string as &str)
+            );
         }
     }
 
@@ -121,15 +121,40 @@ pub enum ResolveRequestType {
     SRV, Host,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum HostResult {
+    CNAME(String),
+    IP(ip::IpAddr),
+}
+
+impl HostResult {
+    pub fn as_cname(&self) -> Option<&String> {
+        if let &HostResult::CNAME(ref target) = self {
+            Some(target)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_ip(&self) -> Option<&ip::IpAddr> {
+        if let &HostResult::IP(ref ip) = self {
+            Some(ip)
+        } else {
+            None
+        }
+    }
+}
+
 
 #[derive(Debug)]
 pub struct ResolveResultMap {
     pub srv_map: BTreeMap<String, Result<HashSet<SrvResult>, ResolveError>>,
-    pub cname_map: BTreeMap<String, Result<HashSet<String>, ResolveError>>,
-    pub host_map: BTreeMap<String, Result<HashSet<ip::IpAddr>, ResolveError>>,
+    pub host_map: BTreeMap<String, Result<HashSet<HostResult>, ResolveError>>,
 }
 
 
+/// Uses the given nameserver to recursively resolve a target. Returns each query performed and
+/// the result.
 pub fn resolve(nameserver: &ip::IpAddr, rtype: ResolveRequestType, target: String)
     -> ResolveResultMap
 {
@@ -145,7 +170,6 @@ pub fn resolve(nameserver: &ip::IpAddr, rtype: ResolveRequestType, target: Strin
     }
 
     let mut srv_result_map = BTreeMap::new();
-    let mut cname_result_map = BTreeMap::new();
     let mut host_result_map = BTreeMap::new();
 
     let mut buf = [0u8; 4096];
@@ -154,26 +178,19 @@ pub fn resolve(nameserver: &ip::IpAddr, rtype: ResolveRequestType, target: Strin
         let res = resolve_internal(nameserver, &mut buf, qtype, &target[..]);
         match res {
             Ok(rtype_map) => {
-                let ResolveResultMapInternal{srv_map, cname_map, host_map} = rtype_map;
+                let ResolveResultMapInternal{srv_map, host_map} = rtype_map;
 
-                // The following block works out of we need to continue resolving
+                // The following block works out if we need to continue resolving
                 // anything, e.g. CNAMEs
                 {
                     let target_srv_iter = srv_map.values()
                         .flat_map(|r| r.iter())
                         .map(|r| &r.target);
 
-                    let target_cname_iter = cname_map.values()
-                        .flat_map(|r| r.iter());
-
-                    for target in target_srv_iter.chain(target_cname_iter) {
+                    for target in target_srv_iter {
                         if host_map.contains_key(target) {
                             continue;
                         } else if host_result_map.contains_key(target) {
-                            continue;
-                        } else if cname_map.contains_key(target) {
-                            continue;
-                        } else if cname_result_map.contains_key(target) {
                             continue;
                         }
 
@@ -191,13 +208,6 @@ pub fn resolve(nameserver: &ip::IpAddr, rtype: ResolveRequestType, target: Strin
 
                 for (k, vec) in srv_map {
                     let entry = srv_result_map.entry(k).or_insert_with(|| Ok(HashSet::new()));
-                    if let &mut Ok(ref mut curr_vec) = entry {
-                        curr_vec.extend(vec.into_iter());
-                    }
-                }
-
-                for (k, vec) in cname_map {
-                    let entry = cname_result_map.entry(k).or_insert_with(|| Ok(HashSet::new()));
                     if let &mut Ok(ref mut curr_vec) = entry {
                         curr_vec.extend(vec.into_iter());
                     }
@@ -226,7 +236,6 @@ pub fn resolve(nameserver: &ip::IpAddr, rtype: ResolveRequestType, target: Strin
 
     ResolveResultMap {
         srv_map: srv_result_map,
-        cname_map: cname_result_map,
         host_map: host_result_map,
     }
 }
@@ -234,8 +243,7 @@ pub fn resolve(nameserver: &ip::IpAddr, rtype: ResolveRequestType, target: Strin
 
 struct ResolveResultMapInternal {
     pub srv_map: BTreeMap<String, HashSet<SrvResult>>,
-    pub cname_map: BTreeMap<String, HashSet<String>>,
-    pub host_map: BTreeMap<String, HashSet<ip::IpAddr>>,
+    pub host_map: BTreeMap<String, HashSet<HostResult>>,
 }
 
 
@@ -249,7 +257,6 @@ fn resolve_internal(nameserver: &ip::IpAddr, buf: &mut [u8], qtype: QueryType, t
     }
 
     let mut srv_map = BTreeMap::new();
-    let mut cname_map = BTreeMap::new();
     let mut host_map = BTreeMap::new();
 
     for answer in packet.answers {
@@ -257,17 +264,17 @@ fn resolve_internal(nameserver: &ip::IpAddr, buf: &mut [u8], qtype: QueryType, t
             RRData::A(ip) => {
                 host_map.entry(answer.name.to_string())
                     .or_insert_with(|| HashSet::new())
-                    .insert(ip::IpAddr::V4(ip));
+                    .insert(HostResult::IP(ip::IpAddr::V4(ip)));
             }
             RRData::AAAA(ip) => {
                 host_map.entry(answer.name.to_string())
                     .or_insert_with(|| HashSet::new())
-                    .insert(ip::IpAddr::V6(ip));
+                    .insert(HostResult::IP(ip::IpAddr::V6(ip)));
             }
             RRData::CNAME(name) => {
-                cname_map.entry(answer.name.to_string())
+                host_map.entry(answer.name.to_string())
                     .or_insert_with(|| HashSet::new())
-                    .insert(name.to_string());
+                    .insert(HostResult::CNAME(name.to_string()));
             }
             RRData::SRV{priority, weight, port, target} => {
                 srv_map.entry(answer.name.to_string())
@@ -285,7 +292,6 @@ fn resolve_internal(nameserver: &ip::IpAddr, buf: &mut [u8], qtype: QueryType, t
 
     Ok(ResolveResultMapInternal {
         srv_map: srv_map,
-        cname_map: cname_map,
         host_map: host_map,
     })
 }
