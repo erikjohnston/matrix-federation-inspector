@@ -145,6 +145,14 @@ impl HostResult {
     }
 }
 
+impl std::fmt::Display for HostResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            &HostResult::CNAME(ref target) => target.fmt(f),
+            &HostResult::IP(ref ip) => ip.fmt(f),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct ResolveResultMap {

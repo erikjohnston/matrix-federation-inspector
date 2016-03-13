@@ -199,7 +199,7 @@ fn print_table<'a, 'b, C, Q, T, E, F>(collection: C, header: Row, mut func: F)
 }
 
 
-fn resolve(server_name: String, nameservers: &[ip::IpAddr]) {
+fn resolve(server_name: String, nameservers: &[ip::IpAddr], report_full: bool) {
     let srv_name = "_matrix._tcp.".to_string() + &server_name;
 
     let mut srv_results_map = resolver::resolve(
@@ -213,47 +213,88 @@ fn resolve(server_name: String, nameservers: &[ip::IpAddr]) {
         _ => false,
     };
 
-    if was_soa_response {
+    let ip_ports = if !was_soa_response {
+        srv_results_map.srv_map
+            .values()  // -> iter of Result<HashSet<SrvResult>, ResolveError>
+            .flat_map(|result| result) // -> iter of HashSet<SrvResult>
+            .flat_map(|srv_results_set| srv_results_set.iter())  // -> iter of SrvResult
+            .map(|srv_result| (
+                resolver::resolve_target_to_ips(&srv_result.target, &srv_results_map),
+                srv_result.priority,
+                srv_result.weight,
+                srv_result.port,
+            ))  // -> (Vec<IpAddr>, port)
+            .flat_map(
+                |(ips, priority, weight, port)| ips.into_iter().map(move |ip|
+                    (priority.to_string(), weight.to_string(), port, ip)
+                )
+            )
+            .sorted_by(|a, b| (&a.1, &a.2).cmp(&(&b.1, &b.2)))
+    } else {
         srv_results_map = resolver::resolve(
             &nameservers[0],
             resolver::ResolveRequestType::Host, server_name.clone()
         );
+
+        let ips = resolver::resolve_target_to_ips(&server_name, &srv_results_map);
+
+        ips.into_iter().map(|ip| (String::new(), String::new(), 8448, ip)).collect_vec()
+    };
+
+    if report_full {
+        println!("{}...", Style::new().bold().paint("SRV Records"));
+
+        print_table(
+            &srv_results_map.srv_map,
+            row!["Query", "Priority", "Weight", "Port", "Target"],
+            |query, srv_results| srv_results.iter().map(|srv_result| Row::new(vec![
+                Cell::new(&query),
+                Cell::new(&srv_result.priority.to_string()),
+                Cell::new(&srv_result.weight.to_string()),
+                Cell::new(&srv_result.port.to_string()),
+                Cell::new(&srv_result.target),
+            ])).collect_vec()
+        );
+
+        println!("{}...", Style::new().bold().paint("Hosts"));
+
+        print_table(
+            &srv_results_map.host_map,
+            row!["Host", "Target"],
+            |query, host_results| host_results.iter().map(|host_result| match host_result {
+                &resolver::HostResult::CNAME(ref target) => {
+                    Row::new(vec![
+                        Cell::new(&query),
+                        Cell::new(&target),
+                    ])
+                }
+                &resolver::HostResult::IP(ref ip) => {
+                    Row::new(vec![
+                        Cell::new(&query),
+                        Cell::new(&format!("{}", ip)),
+                    ])
+                }
+            }).collect_vec()
+        );
+    } else {
+        if ip_ports.is_empty() {
+            println!("Failed to resolve");
+            return;
+        }
+
+        let mut table = table!(["IP", "Priority", "Weight", "Port"]);
+
+        for (priority, weight, port, ip) in ip_ports {
+            table.add_row(Row::new(vec![
+                Cell::new(&format!("{}", ip)),
+                Cell::new(&format!("{}", priority)),
+                Cell::new(&format!("{}", weight)),
+                Cell::new(&format!("{}", port)),
+            ]));
+        }
+
+        table.printstd();
     }
-
-    println!("{}...", Style::new().bold().paint("SRV Records"));
-
-    print_table(
-        &srv_results_map.srv_map,
-        row!["Query", "Priority", "Weight", "Port", "Target"],
-        |query, srv_results| srv_results.iter().map(|srv_result| Row::new(vec![
-            Cell::new(&query),
-            Cell::new(&srv_result.priority.to_string()),
-            Cell::new(&srv_result.weight.to_string()),
-            Cell::new(&srv_result.port.to_string()),
-            Cell::new(&srv_result.target),
-        ])).collect_vec()
-    );
-
-    println!("{}...", Style::new().bold().paint("Hosts"));
-
-    print_table(
-        &srv_results_map.host_map,
-        row!["Host", "Target"],
-        |query, host_results| host_results.iter().map(|host_result| match host_result {
-            &resolver::HostResult::CNAME(ref target) => {
-                Row::new(vec![
-                    Cell::new(&query),
-                    Cell::new(&target),
-                ])
-            }
-            &resolver::HostResult::IP(ref ip) => {
-                Row::new(vec![
-                    Cell::new(&query),
-                    Cell::new(&format!("{}", ip)),
-                ])
-            }
-        }).collect_vec()
-    );
 }
 
 
@@ -516,6 +557,12 @@ fn main() {
             .about("Resolves server name to IP/port")
             .version(crate_version!())
             .arg_from_usage("<server_name>   'Server name to report on'")
+            .arg(Arg::with_name("full")
+                .short("f")
+                .long("full")
+                .help("Return each resolution step, including errors.")
+                .required(false)
+            )
         )
         .get_matches();
 
@@ -537,8 +584,9 @@ fn main() {
         }
         ("resolve", Some(submatches)) => {
             let server_name = submatches.value_of("server_name").unwrap().to_string();
+            let resovle_full = submatches.is_present("full");
 
-            resolve(server_name, &nameservers);
+            resolve(server_name, &nameservers, resovle_full);
         }
         _ => {}
     }
