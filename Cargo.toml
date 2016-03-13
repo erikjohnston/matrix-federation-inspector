@@ -1,11 +1,12 @@
 [package]
 authors = ["Erik Johnston"]
-name = "rust-matrix-test-federation"
+name = "mxfedtest"
 version = "0.1.0"
 
 [dependencies]
 ansi_term = "0.7.2"
 chrono = "0.2.19"
+clap = "2.1.2"
 dns-parser = "0.3.1"
 hyper = "0.7.2"
 ip = "1.1.0"

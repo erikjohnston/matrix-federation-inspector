@@ -1,5 +1,6 @@
 extern crate ansi_term;
 extern crate chrono;
+#[macro_use] extern crate clap;
 extern crate dns_parser;
 extern crate ip;
 extern crate itertools;
@@ -14,33 +15,42 @@ extern crate serde_json;
 
 mod resolver;
 
-use prettytable::Table;
-use prettytable::row::Row;
-use prettytable::cell::Cell;
-use prettytable::format::consts::FORMAT_CLEAN;
-
 use std::collections::HashSet;
 use std::fmt::Display;
 use std::io::{Read};
 use std::fs::File;
 use std::net::TcpStream;
+use std::error::Error;
+
+use clap::{App, AppSettings, Arg, SubCommand};
+
+use prettytable::Table;
+use prettytable::row::Row;
+use prettytable::cell::Cell;
+use prettytable::format::consts::FORMAT_CLEAN;
+
 use ansi_term::Style;
 // use ansi_term::Colour::{Red, Green};
+
 use chrono::naive::datetime::NaiveDateTime;
+
 use openssl::ssl::{SslContext, SslStream, SslMethod, Ssl};
 use openssl::ssl::error::SslError;
 use openssl::crypto::hash::Type as HashType;
 use openssl::nid::Nid;
+
 use rustc_serialize::hex::ToHex;
 use rustc_serialize::base64::FromBase64;
-use std::error::Error;
+
 use hyper::http::RawStatus;
 use hyper::http::h1::Http11Message;
 use hyper::http::message::{HttpMessage, RequestHead};
 use hyper::net::HttpStream;
 use hyper::header::{Host, Headers, Server};
 use hyper::method::Method;
+
 use serde_json::Value;
+
 use itertools::Itertools;
 
 
@@ -189,24 +199,69 @@ fn print_table<'a, 'b, C, Q, T, E, F>(collection: C, header: Row, mut func: F)
 }
 
 
-fn main() {
-    let mut buf = Vec::with_capacity(4096);
-    let mut f = File::open("/etc/resolv.conf").unwrap();
-    f.read_to_end(&mut buf).unwrap();
-    let cfg = resolv_conf::Config::parse(&buf[..]).unwrap();
-
-    let args: Vec<String> = std::env::args().collect();
-
-    if args.len() != 2 {
-        panic!("Expected single string argument <server_name>");
-    }
-
-    let server_name = args[1].to_string();
-
+fn resolve(server_name: String, nameservers: &[ip::IpAddr]) {
     let srv_name = "_matrix._tcp.".to_string() + &server_name;
 
     let mut srv_results_map = resolver::resolve(
-        &cfg.nameservers[0],
+        &nameservers[0],
+        resolver::ResolveRequestType::SRV, srv_name.clone()
+    );
+
+    let was_soa_response = match srv_results_map.srv_map.get(&srv_name) {
+        Some(&Err(ref e)) if e.is_name_error() => true,
+        None => true,
+        _ => false,
+    };
+
+    if was_soa_response {
+        srv_results_map = resolver::resolve(
+            &nameservers[0],
+            resolver::ResolveRequestType::Host, server_name.clone()
+        );
+    }
+
+    println!("{}...", Style::new().bold().paint("SRV Records"));
+
+    print_table(
+        &srv_results_map.srv_map,
+        row!["Query", "Priority", "Weight", "Port", "Target"],
+        |query, srv_results| srv_results.iter().map(|srv_result| Row::new(vec![
+            Cell::new(&query),
+            Cell::new(&srv_result.priority.to_string()),
+            Cell::new(&srv_result.weight.to_string()),
+            Cell::new(&srv_result.port.to_string()),
+            Cell::new(&srv_result.target),
+        ])).collect_vec()
+    );
+
+    println!("{}...", Style::new().bold().paint("Hosts"));
+
+    print_table(
+        &srv_results_map.host_map,
+        row!["Host", "Target"],
+        |query, host_results| host_results.iter().map(|host_result| match host_result {
+            &resolver::HostResult::CNAME(ref target) => {
+                Row::new(vec![
+                    Cell::new(&query),
+                    Cell::new(&target),
+                ])
+            }
+            &resolver::HostResult::IP(ref ip) => {
+                Row::new(vec![
+                    Cell::new(&query),
+                    Cell::new(&format!("{}", ip)),
+                ])
+            }
+        }).collect_vec()
+    );
+}
+
+
+fn report(server_name: String, nameservers: &[ip::IpAddr]) {
+    let srv_name = "_matrix._tcp.".to_string() + &server_name;
+
+    let mut srv_results_map = resolver::resolve(
+        &nameservers[0],
         resolver::ResolveRequestType::SRV, srv_name.clone()
     );
 
@@ -231,7 +286,7 @@ fn main() {
             .collect()
     } else {
         srv_results_map = resolver::resolve(
-            &cfg.nameservers[0],
+            &nameservers[0],
             resolver::ResolveRequestType::Host, server_name.clone()
         );
 
@@ -434,5 +489,57 @@ fn main() {
         server_table.set_format(*FORMAT_CLEAN);
         server_table.printstd();
         println!("");
+    }
+}
+
+
+fn main() {
+    let matches = App::new("mxfedtest")
+        .version(crate_version!())
+        .author("Erik Johnston <public@jki.re>")
+        .about("Diagnostic tool for Matrix federation")
+        .setting(AppSettings::SubcommandRequired)
+        .arg(Arg::with_name("nameserver")
+            .short("n")
+            .long("nameserver")
+            .value_name("IP")
+            .takes_value(true)
+            .help("Sets the nameserver to use")
+            .required(false)
+        )
+        .subcommand(SubCommand::with_name("report")
+            .about("Generates a full report about a server")
+            .version(crate_version!())
+            .arg_from_usage("<server_name>   'Server name to report on'")
+        )
+        .subcommand(SubCommand::with_name("resolve")
+            .about("Resolves server name to IP/port")
+            .version(crate_version!())
+            .arg_from_usage("<server_name>   'Server name to report on'")
+        )
+        .get_matches();
+
+    let nameservers = if matches.is_present("nameserver") {
+        values_t!(matches, "nameserver", ip::IpAddr).unwrap_or_else(|e| e.exit())
+    } else {
+        let mut buf = Vec::with_capacity(4096);
+        let mut f = File::open("/etc/resolv.conf").unwrap();
+        f.read_to_end(&mut buf).unwrap();
+        let cfg = resolv_conf::Config::parse(&buf[..]).unwrap();
+        cfg.nameservers
+    };
+
+    match matches.subcommand() {
+        ("report", Some(submatches)) => {
+            let server_name = submatches.value_of("server_name").unwrap().to_string();
+
+            report(server_name, &nameservers);
+        }
+        ("resolve", Some(submatches)) => {
+            let server_name = submatches.value_of("server_name").unwrap().to_string();
+
+            resolve(server_name, &nameservers);
+        }
+        _ => {}
     }
 }
