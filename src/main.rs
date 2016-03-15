@@ -284,20 +284,15 @@ fn resolve(server_name: String, nameservers: &[ip::IpAddr], output: ResolveOutpu
         }
         ResolveOutput::Simple => {
             if ip_ports.is_empty() {
-                println!("Failed to resolve");
                 std::process::exit(1);
             }
 
-            let mut table = table!(["IP", "Port"]);
-
             for (_, _, port, ip) in ip_ports {
-                table.add_row(Row::new(vec![
-                    Cell::new(&format!("{}", ip)),
-                    Cell::new(&format!("{}", port)),
-                ]));
+                match ip {
+                    ip::IpAddr::V4(ip4) => println!("{}:{}", ip4, port),
+                    ip::IpAddr::V6(ip6) => println!("[{}]:{}", ip6, port),
+                }
             }
-
-            table.printstd();
         }
         ResolveOutput::Graph => {
             let mut nodes = BTreeMap::new();
