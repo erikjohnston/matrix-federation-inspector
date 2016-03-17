@@ -266,7 +266,7 @@ fn resolve(server_name: String, nameservers: &[ip::IpAddr], output: ResolveOutpu
 
             let mut failure_table = Table::new();
             failure_table.set_titles(row!["Query", "Error"]);
-            success_table.set_format(format);
+            failure_table.set_format(format);
 
             for (query, result) in &srv_results_map.srv_map {
                 match result {
