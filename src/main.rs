@@ -643,7 +643,7 @@ fn report(server_name: String, nameservers: &[ip::IpAddr]) {
 fn main() {
     let matches = App::new("mxfedtest")
         .version(crate_version!())
-        .author("Erik Johnston <public@jki.re>")
+        .author("Erik Johnston <mxfedtest@jki.re>")
         .about("Diagnostic tool for Matrix federation")
         .setting(AppSettings::ArgRequiredElseHelp)
         .setting(AppSettings::GlobalVersion)
