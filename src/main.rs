@@ -31,7 +31,6 @@ use prettytable::format::{FormatBuilder, LinePosition, LineSeparator};
 use prettytable::format::consts::FORMAT_CLEAN;
 
 use ansi_term::Style;
-// use ansi_term::Colour::{Red, Green};
 
 use chrono::naive::datetime::NaiveDateTime;
 
