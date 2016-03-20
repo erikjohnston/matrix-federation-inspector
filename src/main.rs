@@ -15,9 +15,10 @@ extern crate serde_json;
 
 mod resolver;
 
+use std::borrow::Cow;
 use std::collections::{HashSet, BTreeMap};
 use std::fmt::Display;
-use std::io::{Read};
+use std::io::{Read, Write, stderr};
 use std::fs::File;
 use std::net::TcpStream;
 use std::error::Error;
@@ -200,11 +201,9 @@ fn print_table<'a, 'b, C, Q, T, E, F>(collection: C, header: Row, mut func: F)
 }
 
 
-#[derive(Debug, Clone, Copy)]
-enum ResolveOutput { Simple, Full, Graph }
-
-
-fn resolve(server_name: String, nameservers: &[ip::IpAddr], output: ResolveOutput) {
+fn resolve_matrix_server(server_name: String, nameservers: &[ip::IpAddr])
+    -> (resolver::ResolveResultMap, Vec<(u16, u16, u16, ip::IpAddr)>)
+{
     let srv_name = "_matrix._tcp.".to_string() + &server_name;
 
     let mut srv_results_map = resolver::resolve(
@@ -231,7 +230,7 @@ fn resolve(server_name: String, nameservers: &[ip::IpAddr], output: ResolveOutpu
             ))  // -> (Vec<IpAddr>, port)
             .flat_map(
                 |(ips, priority, weight, port)| ips.into_iter().map(move |ip|
-                    (priority.to_string(), weight.to_string(), port, ip)
+                    (priority, weight, port, ip)
                 )
             )
             .sorted_by(|a, b| (&a.1, &a.2).cmp(&(&b.1, &b.2)))
@@ -243,8 +242,19 @@ fn resolve(server_name: String, nameservers: &[ip::IpAddr], output: ResolveOutpu
 
         let ips = resolver::resolve_target_to_ips(&server_name, &srv_results_map);
 
-        ips.into_iter().map(|ip| (String::new(), String::new(), 8448, ip)).collect_vec()
+        ips.into_iter().map(|ip| (0, 0, 8448, ip)).collect_vec()
     };
+
+    (srv_results_map, ip_ports)
+}
+
+
+#[derive(Debug, Clone, Copy)]
+enum ResolveOutput { Simple, Full, Graph }
+
+
+fn resolve_command(server_name: String, nameservers: &[ip::IpAddr], output: ResolveOutput) {
+    let (srv_results_map, ip_ports) = resolve_matrix_server(server_name, nameservers);
 
     match output {
         ResolveOutput::Full => {
@@ -336,6 +346,7 @@ fn resolve(server_name: String, nameservers: &[ip::IpAddr], output: ResolveOutpu
         }
         ResolveOutput::Simple => {
             if ip_ports.is_empty() {
+                writeln!(stderr(), "Failed to resolve host.").ok();
                 std::process::exit(1);
             }
 
@@ -404,43 +415,8 @@ fn resolve(server_name: String, nameservers: &[ip::IpAddr], output: ResolveOutpu
 }
 
 
-fn report(server_name: String, nameservers: &[ip::IpAddr]) {
-    let srv_name = "_matrix._tcp.".to_string() + &server_name;
-
-    let mut srv_results_map = resolver::resolve(
-        &nameservers[0],
-        resolver::ResolveRequestType::SRV, srv_name.clone()
-    );
-
-    let was_soa_response = match srv_results_map.srv_map.get(&srv_name) {
-        Some(&Err(ref e)) if e.is_name_error() => true,
-        None => true,
-        _ => false,
-    };
-
-    let ip_ports : Vec<(ip::IpAddr, u16)> = if !was_soa_response {
-        srv_results_map.srv_map
-            .values()  // -> iter of Result<HashSet<SrvResult>, ResolveError>
-            .flat_map(|result| result) // -> iter of HashSet<SrvResult>
-            .flat_map(|srv_results_set| srv_results_set.iter())  // -> iter of SrvResult
-            .map(|srv_result| (
-                resolver::resolve_target_to_ips(&srv_result.target, &srv_results_map),
-                srv_result.port,
-            ))  // -> (Vec<IpAddr>, port)
-            .flat_map(
-                |(ips, port)| ips.into_iter().map(move |ip| (ip, port))
-            )
-            .collect()
-    } else {
-        srv_results_map = resolver::resolve(
-            &nameservers[0],
-            resolver::ResolveRequestType::Host, server_name.clone()
-        );
-
-        let ips = resolver::resolve_target_to_ips(&server_name, &srv_results_map);
-
-        ips.into_iter().map(|ip| (ip, 8448)).collect()
-    };
+fn report_command(server_name: String, nameservers: &[ip::IpAddr]) {
+    let (srv_results_map, ip_ports) = resolve_matrix_server(server_name.clone(), nameservers);
 
     println!("{}...", Style::new().bold().paint("SRV Records"));
 
@@ -479,8 +455,8 @@ fn report(server_name: String, nameservers: &[ip::IpAddr]) {
 
 
     if ip_ports.is_empty() {
-        println!("Failed to resolve. Exiting.");
-        return;
+        writeln!(stderr(), "Failed to resolve host.").ok();
+        std::process::exit(1);
     }
 
 
@@ -499,7 +475,7 @@ fn report(server_name: String, nameservers: &[ip::IpAddr]) {
     let mut certificates = HashSet::new();
     let mut server_responses = Vec::new();
 
-    for (ip, port) in ip_ports {
+    for (_, _, port, ip) in ip_ports {
         match get_ssl_info(
             &server_name,
             ip,
@@ -639,6 +615,78 @@ fn report(server_name: String, nameservers: &[ip::IpAddr]) {
 }
 
 
+enum WhatToFetch { Certs, Keys }
+#[derive(Clone, Copy)] enum FetchFormat { Base64, Hex }
+
+fn fetch_command(
+    server_name: String, nameservers: &[ip::IpAddr], what_to_fetch: WhatToFetch, format: FetchFormat
+) {
+    let (_, ip_ports) = resolve_matrix_server(server_name.clone(), nameservers);
+
+    if ip_ports.is_empty() {
+        writeln!(stderr(), "Failed to resolve host.").ok();
+        std::process::exit(1);
+    }
+
+    for (_, _, port, ip) in ip_ports {
+        match get_ssl_info(
+            &server_name,
+            ip,
+            port,
+        ) {
+            Ok((_, server_response)) => {
+                let val : Value = serde_json::from_slice(&server_response.body).unwrap();
+
+                match what_to_fetch {
+                    WhatToFetch::Certs => {
+                        let tls_fingerprints = val.find("tls_fingerprints").and_then(|v| v.as_array())
+                            .map(|v| v.iter().filter_map(
+                                |o| o.find("sha256").and_then(|s| s.as_string())
+                            )).unwrap();
+
+                        for fingerprint in tls_fingerprints {
+                            println!("sha256 {}", format_value(fingerprint, format));
+                        }
+                    }
+                    WhatToFetch::Keys => {
+                        let verify_keys : Vec<(&String, &str)> = val.find("verify_keys").and_then(|v| v.as_object()).map(
+                            |v| v.iter().filter_map(
+                                |(k,v)| v.find("key").and_then(|s| s.as_string()).map(|s| (k,s))
+                            ).collect()
+                        ).unwrap();
+
+                        for (key, value) in verify_keys {
+                            println!("{} {}", key, format_value(value, format));
+                        }
+                    }
+                }
+
+                return;
+            }
+            Err(e) => {
+                writeln!(stderr(), "Failed to connect to {} {}, {}", ip, port, e).ok();
+            }
+        }
+    }
+
+    std::process::exit(1);
+}
+
+fn format_value<'a>(value: &'a str, format: FetchFormat) -> Cow<'a, str> {
+    match format {
+        FetchFormat::Base64 => value.into(),
+        FetchFormat::Hex => {
+            value.from_base64().unwrap()
+            .chunks(1)
+            .map(|chunk| chunk.to_hex().to_uppercase())
+            .collect_vec()
+            .join(" ")
+            .into()
+        },
+    }
+}
+
+
 fn main() {
     let matches = App::new("mxfedtest")
         .version(crate_version!())
@@ -678,6 +726,29 @@ fn main() {
                 .conflicts_with("full")
             )
         )
+        .subcommand(SubCommand::with_name("fetch")
+            .about("Fetches information about a server")
+            .setting(AppSettings::ArgRequiredElseHelp)
+            .setting(AppSettings::GlobalVersion)
+            .setting(AppSettings::VersionlessSubcommands)
+            .setting(AppSettings::SubcommandRequiredElseHelp)
+            .arg_from_usage("<server_name>   'Server name to report on'")
+            .arg(Arg::with_name("format")
+                .short("f")
+                .long("format")
+                .takes_value(true)
+                .possible_values(&["base64", "hex"])
+                .help("Format of output.")
+                .default_value("base64")
+                .required(false)
+            )
+            .subcommand(SubCommand::with_name("certs")
+                .about("Fetch tls certificates advertised by server")
+            )
+            .subcommand(SubCommand::with_name("keys")
+                .about("Fetch signing keys advertised by server")
+            )
+        )
         .get_matches();
 
     let nameservers = if matches.is_present("nameserver") {
@@ -694,7 +765,7 @@ fn main() {
         ("report", Some(submatches)) => {
             let server_name = submatches.value_of("server_name").unwrap().to_string();
 
-            report(server_name, &nameservers);
+            report_command(server_name, &nameservers);
         }
         ("resolve", Some(submatches)) => {
             let server_name = submatches.value_of("server_name").unwrap().to_string();
@@ -706,8 +777,27 @@ fn main() {
                 ResolveOutput::Simple
             };
 
-            resolve(server_name, &nameservers, resolve_output);
+            resolve_command(server_name, &nameservers, resolve_output);
         }
-        _ => {}
+        ("fetch", Some(submatches)) => {
+            let server_name = submatches.value_of("server_name").unwrap().to_string();
+
+            let format = match submatches.value_of("format").unwrap() {
+                "base64" => FetchFormat::Base64,
+                "hex" => FetchFormat::Hex,
+                _ => panic!("Unrecognized format"),
+            };
+
+            match submatches.subcommand() {
+                ("certs", Some(_)) => {
+                    fetch_command(server_name, &nameservers, WhatToFetch::Certs, format);
+                }
+                ("keys", Some(_)) => {
+                    fetch_command(server_name, &nameservers, WhatToFetch::Keys, format);
+                }
+                _ => panic!("Unrecognized subcommand.")
+            }
+        }
+        _ => panic!("Unrecognized subcommand.")
     }
 }
