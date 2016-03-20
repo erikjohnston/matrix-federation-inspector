@@ -14,6 +14,7 @@ OPTIONS:
     -n, --nameserver <IP>    Sets the nameserver to use
 
 SUBCOMMANDS:
+    fetch      Fetches information about a server
     help       Prints this message or the help message of the given subcommand(s)
     report     Generates a full report about a server
     resolve    Resolves server name to IP/port
