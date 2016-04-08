@@ -1,14 +1,13 @@
 
 use dns_parser;
 use dns_parser::{QueryType, QueryClass, RRData};
-use ip;
 use rand;
 
 use std;
 use std::error::Error;
 use std::collections::{BTreeMap, HashSet};
 use std::iter::IntoIterator;
-use std::net::UdpSocket;
+use std::net::{IpAddr, UdpSocket};
 use rand::Rng;
 
 
@@ -37,7 +36,7 @@ quick_error! {
             description(err.description())
             display("DnsError: {}", err)
         }
-        DnsServerFailure(rcode: dns_parser::ResponseCode) {
+        ServerFailure(rcode: dns_parser::ResponseCode) {
             description("NameServer responded with error")
             display(x) -> ("DnsServerFailure: {}, rcode: {:?}", x.description(), rcode)
         }
@@ -46,8 +45,8 @@ quick_error! {
 
 impl ResolveError {
     pub fn is_name_error(&self) -> bool {
-        match self {
-            &ResolveError::DnsServerFailure(dns_parser::ResponseCode::NameError) => true,
+        match *self {
+            ResolveError::ServerFailure(dns_parser::ResponseCode::NameError) => true,
             _ => false
         }
     }
@@ -62,7 +61,7 @@ pub struct SrvResult {
     pub target: String,
 }
 
-pub fn resolve_target_to_ips(target: &str, maps: &ResolveResultMap) -> Vec<ip::IpAddr> {
+pub fn resolve_target_to_ips(target: &str, maps: &ResolveResultMap) -> Vec<IpAddr> {
     let mut result_ips = Vec::new();
 
     let mut queued_targets = vec![target];
@@ -76,11 +75,11 @@ pub fn resolve_target_to_ips(target: &str, maps: &ResolveResultMap) -> Vec<ip::I
         }
     }
 
-    return result_ips;
+    result_ips
 }
 
 
-fn send_query<'a>(buf: &'a mut [u8], nameserver: &ip::IpAddr, query_type: QueryType, host: &str)
+fn send_query<'a>(buf: &'a mut [u8], nameserver: &IpAddr, query_type: QueryType, host: &str)
 -> Result<dns_parser::Packet<'a>, DnsIoError> {
     let id = rand::thread_rng().gen();
     let mut builder = dns_parser::Builder::new_query(id, true);
@@ -91,13 +90,13 @@ fn send_query<'a>(buf: &'a mut [u8], nameserver: &ip::IpAddr, query_type: QueryT
     );
     let query = builder.build().unwrap();
 
-    let socket = match nameserver {
-        &ip::IpAddr::V4(addr) => {
+    let socket = match *nameserver {
+        IpAddr::V4(addr) => {
             let socket = try!(UdpSocket::bind("0.0.0.0:0"));
             try!(socket.send_to(&query[..], (addr, 53)));
             socket
         }
-        &ip::IpAddr::V6(addr) => {
+        IpAddr::V6(addr) => {
             let socket = try!(UdpSocket::bind(":::0"));
             try!(socket.send_to(&query[..], (addr, 53)));
             socket
@@ -124,20 +123,20 @@ pub enum ResolveRequestType {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum HostResult {
     CNAME(String),
-    IP(ip::IpAddr),
+    IP(IpAddr),
 }
 
 impl HostResult {
     pub fn as_cname(&self) -> Option<&String> {
-        if let &HostResult::CNAME(ref target) = self {
+        if let HostResult::CNAME(ref target) = *self {
             Some(target)
         } else {
             None
         }
     }
 
-    pub fn as_ip(&self) -> Option<&ip::IpAddr> {
-        if let &HostResult::IP(ref ip) = self {
+    pub fn as_ip(&self) -> Option<&IpAddr> {
+        if let HostResult::IP(ref ip) = *self {
             Some(ip)
         } else {
             None
@@ -147,9 +146,9 @@ impl HostResult {
 
 impl std::fmt::Display for HostResult {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            &HostResult::CNAME(ref target) => target.fmt(f),
-            &HostResult::IP(ref ip) => ip.fmt(f),
+        match *self {
+            HostResult::CNAME(ref target) => target.fmt(f),
+            HostResult::IP(ref ip) => ip.fmt(f),
         }
     }
 }
@@ -163,7 +162,7 @@ pub struct ResolveResultMap {
 
 /// Uses the given nameserver to recursively resolve a target. Returns each query performed and
 /// the result.
-pub fn resolve(nameserver: &ip::IpAddr, rtype: ResolveRequestType, target: String)
+pub fn resolve(nameserver: &IpAddr, rtype: ResolveRequestType, target: String)
     -> ResolveResultMap
 {
     let mut pending_queries = Vec::new();
@@ -196,9 +195,7 @@ pub fn resolve(nameserver: &ip::IpAddr, rtype: ResolveRequestType, target: Strin
                         .map(|r| &r.target);
 
                     for target in target_srv_iter {
-                        if host_map.contains_key(target) {
-                            continue;
-                        } else if host_result_map.contains_key(target) {
+                        if host_map.contains_key(target) || host_result_map.contains_key(target) {
                             continue;
                         }
 
@@ -216,14 +213,14 @@ pub fn resolve(nameserver: &ip::IpAddr, rtype: ResolveRequestType, target: Strin
 
                 for (k, vec) in srv_map {
                     let entry = srv_result_map.entry(k).or_insert_with(|| Ok(HashSet::new()));
-                    if let &mut Ok(ref mut curr_vec) = entry {
+                    if let Ok(ref mut curr_vec) = *entry {
                         curr_vec.extend(vec.into_iter());
                     }
                 }
 
                 for (k, vec) in host_map {
                     let entry = host_result_map.entry(k).or_insert_with(|| Ok(HashSet::new()));
-                    if let &mut Ok(ref mut curr_vec) = entry {
+                    if let Ok(ref mut curr_vec) = *entry {
                         curr_vec.extend(vec.into_iter());
                     }
                 }
@@ -255,13 +252,13 @@ struct ResolveResultMapInternal {
 }
 
 
-fn resolve_internal(nameserver: &ip::IpAddr, buf: &mut [u8], qtype: QueryType, target: &str)
+fn resolve_internal(nameserver: &IpAddr, buf: &mut [u8], qtype: QueryType, target: &str)
     -> Result<ResolveResultMapInternal, ResolveError>
 {
     let packet = try!(send_query(buf, nameserver, qtype, target));
 
     if packet.header.response_code != dns_parser::ResponseCode::NoError {
-        return Err(ResolveError::DnsServerFailure(packet.header.response_code));
+        return Err(ResolveError::ServerFailure(packet.header.response_code));
     }
 
     let mut srv_map = BTreeMap::new();
@@ -271,22 +268,22 @@ fn resolve_internal(nameserver: &ip::IpAddr, buf: &mut [u8], qtype: QueryType, t
         match answer.data {
             RRData::A(ip) => {
                 host_map.entry(answer.name.to_string())
-                    .or_insert_with(|| HashSet::new())
-                    .insert(HostResult::IP(ip::IpAddr::V4(ip)));
+                    .or_insert_with(HashSet::new)
+                    .insert(HostResult::IP(IpAddr::V4(ip)));
             }
             RRData::AAAA(ip) => {
                 host_map.entry(answer.name.to_string())
-                    .or_insert_with(|| HashSet::new())
-                    .insert(HostResult::IP(ip::IpAddr::V6(ip)));
+                    .or_insert_with(HashSet::new)
+                    .insert(HostResult::IP(IpAddr::V6(ip)));
             }
             RRData::CNAME(name) => {
                 host_map.entry(answer.name.to_string())
-                    .or_insert_with(|| HashSet::new())
+                    .or_insert_with(HashSet::new)
                     .insert(HostResult::CNAME(name.to_string()));
             }
             RRData::SRV{priority, weight, port, target} => {
                 srv_map.entry(answer.name.to_string())
-                    .or_insert_with(|| HashSet::new())
+                    .or_insert_with(HashSet::new)
                     .insert(SrvResult {
                         priority: priority,
                         weight: weight,

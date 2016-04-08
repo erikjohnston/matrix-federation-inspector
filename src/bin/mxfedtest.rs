@@ -1,29 +1,25 @@
-extern crate ansi_term;
-extern crate chrono;
 #[macro_use] extern crate clap;
-extern crate dns_parser;
-extern crate ip;
-extern crate itertools;
-extern crate hyper;
-extern crate openssl;
-extern crate rand;
+extern crate chrono;
+extern crate mxfedtest;
 extern crate resolv_conf;
-extern crate rustc_serialize;
-extern crate serde_json;
-#[macro_use] extern crate quick_error;
 #[macro_use] extern crate prettytable;
+extern crate serde_json;
+extern crate itertools;
+extern crate rustc_serialize;
 
-mod resolver;
+use mxfedtest::{
+    resolver, resolve_matrix_server, get_ssl_info, KeyApiResponse,
+};
 
+use chrono::naive::datetime::NaiveDateTime;
+
+use std::fs::File;
 use std::borrow::Cow;
 use std::collections::{HashSet, BTreeMap};
 use std::fmt::Display;
 use std::io::{Read, Write, stderr};
-use std::fs::File;
-use std::net::TcpStream;
+use std::net::IpAddr;
 use std::error::Error;
-
-use clap::{App, AppSettings, Arg, SubCommand};
 
 use prettytable::Table;
 use prettytable::row::Row;
@@ -31,141 +27,21 @@ use prettytable::cell::Cell;
 use prettytable::format::{FormatBuilder, LinePosition, LineSeparator};
 use prettytable::format::consts::FORMAT_CLEAN;
 
-use ansi_term::Style;
+use clap::{App, AppSettings, Arg, SubCommand};
 
-use chrono::naive::datetime::NaiveDateTime;
-
-use openssl::ssl::{SslContext, SslStream, SslMethod, Ssl};
-use openssl::ssl::error::SslError;
-use openssl::crypto::hash::Type as HashType;
-use openssl::nid::Nid;
+use itertools::Itertools;
 
 use rustc_serialize::hex::ToHex;
 use rustc_serialize::base64::FromBase64;
 
-use hyper::http::RawStatus;
-use hyper::http::h1::Http11Message;
-use hyper::http::message::{HttpMessage, RequestHead};
-use hyper::net::HttpStream;
-use hyper::header::{Host, Headers, Server};
-use hyper::method::Method;
-
-use serde_json::Value;
-
-use itertools::Itertools;
-
-
-quick_error!{
-    #[derive(Debug)]
-    pub enum SslStreamError {
-        Io(err: std::io::Error) {
-            from()
-            description(err.description())
-            display("I/O error: {}", err)
-        }
-        Ssl(err: SslError) {
-            from()
-            description(err.description())
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct CertificateInfo {
-    cert_sha256: Vec<u8>,
-    common_name: String,
-}
-
-
-#[derive(Debug, Clone)]
-struct ConnectionInfo {
-    ip: ip::IpAddr,
-    port: u16,
-    server_name: String,
-    cipher_name: &'static str,
-    cipher_version: &'static str,
-    cipher_bits: i32,
-    cert_info: CertificateInfo,
-}
-
-#[derive(Debug, Clone)]
-struct ServerResponse {
-    status_code: RawStatus,
-    server_header: Option<String>,
-    body: Vec<u8>,
-}
-
-fn get_ssl_info(server_name: &String, ipaddr: ip::IpAddr, port: u16)
-    -> Result<(ConnectionInfo, ServerResponse), SslStreamError>
-{
-    let stream = try!(match ipaddr {
-        ip::IpAddr::V4(ip) => TcpStream::connect((ip, port)),
-        ip::IpAddr::V6(ip) => TcpStream::connect((ip, port)),
-    });
-
-    let ssl_context = try!(SslContext::new(SslMethod::Sslv23));
-    let ssl = try!(Ssl::new(&ssl_context));
-    try!(ssl.set_hostname(server_name));
-
-    // hyper requires we wrap the tcp stream in a HttpStream
-    let ssl_stream = try!(SslStream::connect(ssl, HttpStream(stream)));
-
-    let conn_info = {
-        let peer_cert = ssl_stream.ssl().peer_certificate().unwrap();
-        let cipher = ssl_stream.ssl().get_current_cipher().unwrap();
-        let server_name = ssl_stream.ssl().get_servername().unwrap();
-
-        let common_name = peer_cert.subject_name().text_by_nid(Nid::CN).unwrap().to_string();
-
-        ConnectionInfo{
-            ip: ipaddr,
-            port: port,
-            cipher_name: cipher.name(),
-            cipher_version: ssl_stream.ssl().version(),
-            cipher_bits: cipher.bits().secret,
-            server_name: server_name,
-            cert_info: CertificateInfo{
-                common_name: common_name,
-                cert_sha256: peer_cert.fingerprint(HashType::SHA256).unwrap(),
-            }
-        }
-    };
-
-    let mut msg = Http11Message::with_stream(Box::new(ssl_stream));
-
-    let mut headers = Headers::new();
-    headers.set(Host{
-        hostname: server_name.clone(),
-        port: None,
-    });
-
-    let url = format!("https://{}/_matrix/key/v2/server/", server_name).parse().unwrap();
-
-    msg.set_outgoing(RequestHead{
-        headers: headers,
-        method: Method::Get,
-        url: url,
-    }).unwrap();
-
-    let resp_headers = msg.get_incoming().unwrap();
-
-    let mut body = Vec::new();
-
-    msg.read_to_end(&mut body).unwrap();
-
-    let server_response = ServerResponse {
-        status_code: resp_headers.raw_status,
-        server_header: resp_headers.headers.get::<Server>().map(|s| s.0.clone()),
-        body: body,
-    };
-
-    Ok((conn_info, server_response))
-}
-
 
 fn print_table<'a, 'b, C, Q, T, E, F>(collection: C, header: Row, mut func: F)
-    where C: IntoIterator<Item=(Q, &'a Result<T, E>)>, E: Error + 'a, T: 'a, Q: 'a + Display, 'a: 'b,
-    F: FnMut(Q, &'b T) -> Vec<Row>
+    where C: IntoIterator<Item=(Q, &'a Result<T, E>)>,
+          E: Error + 'a,
+          T: 'a,
+          Q: 'a + Display,
+          F: FnMut(Q, &'b T) -> Vec<Row>,
+          'a: 'b,
 {
     let mut success_table = Table::new();
     success_table.set_titles(header);
@@ -174,13 +50,13 @@ fn print_table<'a, 'b, C, Q, T, E, F>(collection: C, header: Row, mut func: F)
     failure_table.set_titles(row!["Query", "Error"]);
 
     for (query, result) in collection {
-        match result {
-            &Ok(ref items) => {
+        match *result {
+            Ok(ref items) => {
                 for row in func(query, items) {
                     success_table.add_row(row);
                 }
             }
-            &Err(ref e) => {
+            Err(ref e) => {
                 failure_table.add_row(Row::new(vec![
                     Cell::new(&format!("{}", query)).style_spec("Fr"),
                     Cell::new(&format!("{}", e))
@@ -201,59 +77,10 @@ fn print_table<'a, 'b, C, Q, T, E, F>(collection: C, header: Row, mut func: F)
 }
 
 
-fn resolve_matrix_server(server_name: String, nameservers: &[ip::IpAddr])
-    -> (resolver::ResolveResultMap, Vec<(u16, u16, u16, ip::IpAddr)>)
-{
-    let srv_name = "_matrix._tcp.".to_string() + &server_name;
-
-    let mut srv_results_map = resolver::resolve(
-        &nameservers[0],
-        resolver::ResolveRequestType::SRV, srv_name.clone()
-    );
-
-    let was_soa_response = match srv_results_map.srv_map.get(&srv_name) {
-        Some(&Err(ref e)) if e.is_name_error() => true,
-        None => true,
-        _ => false,
-    };
-
-    let ip_ports = if !was_soa_response {
-        srv_results_map.srv_map
-            .values()  // -> iter of Result<HashSet<SrvResult>, ResolveError>
-            .flat_map(|result| result) // -> iter of HashSet<SrvResult>
-            .flat_map(|srv_results_set| srv_results_set.iter())  // -> iter of SrvResult
-            .map(|srv_result| (
-                resolver::resolve_target_to_ips(&srv_result.target, &srv_results_map),
-                srv_result.priority,
-                srv_result.weight,
-                srv_result.port,
-            ))  // -> (Vec<IpAddr>, port)
-            .flat_map(
-                |(ips, priority, weight, port)| ips.into_iter().map(move |ip|
-                    (priority, weight, port, ip)
-                )
-            )
-            .sorted_by(|a, b| (&a.1, &a.2).cmp(&(&b.1, &b.2)))
-    } else {
-        srv_results_map = resolver::resolve(
-            &nameservers[0],
-            resolver::ResolveRequestType::Host, server_name.clone()
-        );
-
-        let ips = resolver::resolve_target_to_ips(&server_name, &srv_results_map);
-
-        ips.into_iter().map(|ip| (0, 0, 8448, ip)).collect_vec()
-    };
-
-    (srv_results_map, ip_ports)
-}
-
-
 #[derive(Debug, Clone, Copy)]
 enum ResolveOutput { Simple, Full, Graph }
 
-
-fn resolve_command(server_name: String, nameservers: &[ip::IpAddr], output: ResolveOutput) {
+fn resolve_command(server_name: String, nameservers: &[IpAddr], output: ResolveOutput) {
     let (srv_results_map, ip_ports) = resolve_matrix_server(server_name, nameservers);
 
     match output {
@@ -278,8 +105,8 @@ fn resolve_command(server_name: String, nameservers: &[ip::IpAddr], output: Reso
             failure_table.set_format(format);
 
             for (query, result) in &srv_results_map.srv_map {
-                match result {
-                    &Ok(ref srv_results) => {
+                match *result {
+                    Ok(ref srv_results) => {
                         for srv_result in srv_results {
                             success_table.add_row(Row::new(vec![
                                 Cell::new(&query),
@@ -290,9 +117,9 @@ fn resolve_command(server_name: String, nameservers: &[ip::IpAddr], output: Reso
                             ]));
                         }
                     }
-                    &Err(ref e) => {
+                    Err(ref e) => {
                         failure_table.add_row(Row::new(vec![
-                            Cell::new(&format!("{}", query)).style_spec("Fr"),
+                            Cell::new(&query).style_spec("Fr"),
                             Cell::new(&format!("{}", e))
                         ]));
                     }
@@ -300,11 +127,11 @@ fn resolve_command(server_name: String, nameservers: &[ip::IpAddr], output: Reso
             }
 
             for (query, result) in &srv_results_map.host_map {
-                match result {
-                    &Ok(ref host_results) => {
+                match *result {
+                    Ok(ref host_results) => {
                         for host_result in host_results {
-                            success_table.add_row(match host_result {
-                                &resolver::HostResult::CNAME(ref target) => {
+                            success_table.add_row(match *host_result {
+                                resolver::HostResult::CNAME(ref target) => {
                                     Row::new(vec![
                                         Cell::new(&query),
                                         Cell::new(""),
@@ -313,7 +140,7 @@ fn resolve_command(server_name: String, nameservers: &[ip::IpAddr], output: Reso
                                         Cell::new(&target),
                                     ])
                                 }
-                                &resolver::HostResult::IP(ref ip) => {
+                                resolver::HostResult::IP(ref ip) => {
                                     Row::new(vec![
                                         Cell::new(&query),
                                         Cell::new(""),
@@ -325,9 +152,9 @@ fn resolve_command(server_name: String, nameservers: &[ip::IpAddr], output: Reso
                             });
                         }
                     }
-                    &Err(ref e) => {
+                    Err(ref e) => {
                         failure_table.add_row(Row::new(vec![
-                            Cell::new(&format!("{}", query)).style_spec("Fr"),
+                            Cell::new(&query).style_spec("Fr"),
                             Cell::new(&format!("{}", e))
                         ]));
                     }
@@ -340,20 +167,20 @@ fn resolve_command(server_name: String, nameservers: &[ip::IpAddr], output: Reso
             }
 
             if failure_table.len() > 0 {
-                failure_table.printstd();
+                failure_table.printstd();;
                 println!("");
             }
         }
         ResolveOutput::Simple => {
             if ip_ports.is_empty() {
-                writeln!(stderr(), "Failed to resolve host.").ok();
+                writeln!(stderr(), "Failed to resolve host.").unwrap();
                 std::process::exit(1);
             }
 
             for (_, _, port, ip) in ip_ports {
                 match ip {
-                    ip::IpAddr::V4(ip4) => println!("{}:{}", ip4, port),
-                    ip::IpAddr::V6(ip6) => println!("[{}]:{}", ip6, port),
+                    IpAddr::V4(ip4) => println!("{}:{}", ip4, port),
+                    IpAddr::V6(ip6) => println!("[{}]:{}", ip6, port),
                 }
             }
         }
@@ -362,8 +189,8 @@ fn resolve_command(server_name: String, nameservers: &[ip::IpAddr], output: Reso
             let mut edges = Vec::new();
 
             for (query, result) in &srv_results_map.srv_map {
-                match result {
-                    &Ok(ref srv_results) => {
+                match *result {
+                    Ok(ref srv_results) => {
                         let srv_label = format!("{} (SRV)", &query);
                         nodes.insert(query.clone(), srv_label);
 
@@ -374,7 +201,7 @@ fn resolve_command(server_name: String, nameservers: &[ip::IpAddr], output: Reso
                             edges.push((query.clone(), srv_result.target.clone()))
                         }
                     }
-                    &Err(ref e) => {
+                    Err(ref e) => {
                         let name = format!("{}-error", query);
                         nodes.insert(name.clone(), format!("{}", e));
                         edges.push((query.clone(), name))
@@ -383,15 +210,15 @@ fn resolve_command(server_name: String, nameservers: &[ip::IpAddr], output: Reso
             }
 
             for (query, result) in &srv_results_map.host_map {
-                match result {
-                    &Ok(ref host_results) => {
+                match *result {
+                    Ok(ref host_results) => {
                         for host_result in host_results {
                             let host = format!("{}", host_result);
                             nodes.insert(host.clone(), host.clone());
                             edges.push((query.clone(), host))
                         }
                     }
-                    &Err(ref e) => {
+                    Err(ref e) => {
                         let name = format!("{}-error", query);
                         nodes.insert(name.clone(), format!("{}", e));
                         edges.push((query.clone(), name))
@@ -415,10 +242,10 @@ fn resolve_command(server_name: String, nameservers: &[ip::IpAddr], output: Reso
 }
 
 
-fn report_command(server_name: String, nameservers: &[ip::IpAddr]) {
+fn report_command(server_name: String, nameservers: &[IpAddr]) {
     let (srv_results_map, ip_ports) = resolve_matrix_server(server_name.clone(), nameservers);
 
-    println!("{}...", Style::new().bold().paint("SRV Records"));
+    println!("SRV Records...");
 
     print_table(
         &srv_results_map.srv_map,
@@ -432,19 +259,19 @@ fn report_command(server_name: String, nameservers: &[ip::IpAddr]) {
         ])).collect_vec()
     );
 
-    println!("{}...", Style::new().bold().paint("Hosts"));
+    println!("Hosts...");
 
     print_table(
         &srv_results_map.host_map,
         row!["Host", "Target"],
-        |query, host_results| host_results.iter().map(|host_result| match host_result {
-            &resolver::HostResult::CNAME(ref target) => {
+        |query, host_results| host_results.iter().map(|host_result| match *host_result {
+            resolver::HostResult::CNAME(ref target) => {
                 Row::new(vec![
                     Cell::new(&query),
                     Cell::new(&target),
                 ])
             }
-            &resolver::HostResult::IP(ref ip) => {
+            resolver::HostResult::IP(ref ip) => {
                 Row::new(vec![
                     Cell::new(&query),
                     Cell::new(&format!("{}", ip)),
@@ -455,7 +282,7 @@ fn report_command(server_name: String, nameservers: &[ip::IpAddr]) {
 
 
     if ip_ports.is_empty() {
-        writeln!(stderr(), "Failed to resolve host.").ok();
+        writeln!(stderr(), "Failed to resolve host.").unwrap();
         std::process::exit(1);
     }
 
@@ -488,12 +315,6 @@ fn report_command(server_name: String, nameservers: &[ip::IpAddr]) {
                     .map(|chunk| chunk.to_hex().to_uppercase())
                     .collect::<Vec<String>>()
                     .join("\n");
-
-                // let val : Value = serde_json::from_slice(&server_response.body).unwrap();
-                // let sn = val.find("server_name").and_then(|v| v.as_string()).unwrap_or("");
-
-                // Should probably print if this is None
-                // let server_name_matching = sn == server_name;
 
                 conn_table.add_row(Row::new(vec![
                     Cell::new(&conn_info.ip.to_string()).style_spec("Fgb"),
@@ -536,13 +357,10 @@ fn report_command(server_name: String, nameservers: &[ip::IpAddr]) {
         ]);
 
         for cert in certificates {
-            let split_fingerprint = {
-                let s = cert.cert_sha256.chunks(8)
-                    .map(|chunk| chunk.to_hex().to_uppercase())
-                    .collect::<Vec<String>>()
-                    .join("\n");
-                s
-            };
+            let split_fingerprint = cert.cert_sha256.chunks(8)
+                .map(|chunk| chunk.to_hex().to_uppercase())
+                .collect::<Vec<String>>()
+                .join("\n");
 
             cert_table.add_row(Row::new(vec![
                 Cell::new(&split_fingerprint),
@@ -556,23 +374,22 @@ fn report_command(server_name: String, nameservers: &[ip::IpAddr]) {
 
 
     for ((ip, port), server_response) in server_responses {
-        let val : Value = serde_json::from_slice(&server_response.body).unwrap();
+        let val : KeyApiResponse = serde_json::from_slice(&server_response.body).unwrap();
 
         let mut server_table = Table::new();
 
         server_table.add_row(row![
             "IP/Port", &match ip {
-                ip::IpAddr::V4(ref ipv4) => format!("{}:{}", ipv4, port),
-                ip::IpAddr::V6(ref ipv6) => format!("[{}]:{}", ipv6, port),
+                IpAddr::V4(ref ipv4) => format!("{}:{}", ipv4, port),
+                IpAddr::V6(ref ipv6) => format!("[{}]:{}", ipv6, port),
             }
         ]);
 
-        let sn = val.find("server_name").and_then(|v| v.as_string()).unwrap_or("");
         server_table.add_row(row![
-            "Server Name ", &sn
+            "Server Name ", &val.server_name
         ]);
 
-        let vu = val.find("valid_until_ts").and_then(|v| v.as_u64()).unwrap_or(0u64);
+        let vu = val.valid_until_ts;
         let date = NaiveDateTime::from_timestamp(
             (vu / 1000) as i64, ((vu % 1000) * 1000000) as u32
         );
@@ -580,31 +397,20 @@ fn report_command(server_name: String, nameservers: &[ip::IpAddr]) {
             "Valid until ", &format!("{}", date)
         ]);
 
-        let ver = server_response.server_header.unwrap_or(String::new());
+        let ver = server_response.server_header.unwrap_or_default();
         server_table.add_row(row![
             "Server Header ", &ver
         ]);
 
-        let verify_keys : Vec<(&String, &str)> = val.find("verify_keys").and_then(|v| v.as_object()).map(
-            |v| v.iter().filter_map(
-                |(k,v)| v.find("key").and_then(|s| s.as_string()).map(|s| (k,s))
-            ).collect()
-        ).unwrap();
-
-        for (key, value) in verify_keys {
+        for (key_id, key) in val.verify_keys {
             server_table.add_row(row![
-                "Verify key ", &format!("{} {}", key, value)
+                "Verify key ", &format!("{} {}", key_id, key.key)
             ]);
         }
 
-        let tls_fingerprints = val.find("tls_fingerprints").and_then(|v| v.as_array())
-            .map(|v| v.iter().filter_map(
-                |o| o.find("sha256").and_then(|s| s.as_string())
-            )).unwrap();
-
-        for fingerprint in tls_fingerprints {
+        for fingerprint in val.tls_fingerprints {
             server_table.add_row(row![
-                "TLS fingerprint ", &fingerprint.from_base64().unwrap().to_hex().to_uppercase()
+                "TLS fingerprint ", &fingerprint.sha256.from_base64().unwrap().to_hex().to_uppercase()
             ]);
         }
 
@@ -615,16 +421,20 @@ fn report_command(server_name: String, nameservers: &[ip::IpAddr]) {
 }
 
 
+
 enum WhatToFetch { Certs, Keys }
-#[derive(Clone, Copy)] enum FetchFormat { Base64, Hex }
+
+#[derive(Clone, Copy)]
+enum FetchFormat { Base64, Hex }
 
 fn fetch_command(
-    server_name: String, nameservers: &[ip::IpAddr], what_to_fetch: WhatToFetch, format: FetchFormat
+    server_name: String, nameservers: &[IpAddr], what_to_fetch: WhatToFetch,
+    format: FetchFormat,
 ) {
     let (_, ip_ports) = resolve_matrix_server(server_name.clone(), nameservers);
 
     if ip_ports.is_empty() {
-        writeln!(stderr(), "Failed to resolve host.").ok();
+        writeln!(stderr(), "Failed to resolve host.").unwrap();
         std::process::exit(1);
     }
 
@@ -635,28 +445,17 @@ fn fetch_command(
             port,
         ) {
             Ok((_, server_response)) => {
-                let val : Value = serde_json::from_slice(&server_response.body).unwrap();
+                let val : KeyApiResponse = serde_json::from_slice(&server_response.body).unwrap();
 
                 match what_to_fetch {
                     WhatToFetch::Certs => {
-                        let tls_fingerprints = val.find("tls_fingerprints").and_then(|v| v.as_array())
-                            .map(|v| v.iter().filter_map(
-                                |o| o.find("sha256").and_then(|s| s.as_string())
-                            )).unwrap();
-
-                        for fingerprint in tls_fingerprints {
-                            println!("sha256 {}", format_value(fingerprint, format));
+                        for fingerprint in val.tls_fingerprints {
+                            println!("sha256 {}", format_value(&fingerprint.sha256, format));
                         }
                     }
                     WhatToFetch::Keys => {
-                        let verify_keys : Vec<(&String, &str)> = val.find("verify_keys").and_then(|v| v.as_object()).map(
-                            |v| v.iter().filter_map(
-                                |(k,v)| v.find("key").and_then(|s| s.as_string()).map(|s| (k,s))
-                            ).collect()
-                        ).unwrap();
-
-                        for (key, value) in verify_keys {
-                            println!("{} {}", key, format_value(value, format));
+                        for (key_id, key) in val.verify_keys {
+                            println!("{} {}", key_id, format_value(&key.key, format));
                         }
                     }
                 }
@@ -664,15 +463,17 @@ fn fetch_command(
                 return;
             }
             Err(e) => {
-                writeln!(stderr(), "Failed to connect to {} {}, {}", ip, port, e).ok();
+                writeln!(stderr(), "Failed to connect to {} {}, {}", ip, port, e).unwrap();
             }
         }
     }
 
+    writeln!(stderr(), "Failed to connect to any host").unwrap();
+
     std::process::exit(1);
 }
 
-fn format_value<'a>(value: &'a str, format: FetchFormat) -> Cow<'a, str> {
+fn format_value(value: & str, format: FetchFormat) -> Cow<str> {
     match format {
         FetchFormat::Base64 => value.into(),
         FetchFormat::Hex => {
@@ -685,6 +486,8 @@ fn format_value<'a>(value: &'a str, format: FetchFormat) -> Cow<'a, str> {
         },
     }
 }
+
+
 
 
 fn main() {
@@ -752,7 +555,7 @@ fn main() {
         .get_matches();
 
     let nameservers = if matches.is_present("nameserver") {
-        values_t!(matches, "nameserver", ip::IpAddr).unwrap_or_else(|e| e.exit())
+        values_t!(matches, "nameserver", IpAddr).unwrap_or_else(|e| e.exit())
     } else {
         let mut buf = Vec::with_capacity(4096);
         let mut f = File::open("/etc/resolv.conf").unwrap();
