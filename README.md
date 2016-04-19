@@ -1,4 +1,4 @@
-# matrix-federation-inspector
+# mxfedtest
 
 A diagnostic tool for Matrix federation.
 
