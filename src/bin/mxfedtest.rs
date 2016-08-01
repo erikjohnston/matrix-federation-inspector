@@ -327,7 +327,7 @@ fn report_command(server_name: String, nameservers: &[IpAddr], sni: bool) {
                     Cell::new(&conn_info.cipher_bits.to_string()),
                 ]));
 
-                server_responses.push(((ip, port), server_response));
+                server_responses.push(((ip, port), (server_response, conn_info.cert_info)));
             }
             Err(e) => {
                 err_table.add_row(Row::new(vec![
@@ -354,7 +354,7 @@ fn report_command(server_name: String, nameservers: &[IpAddr], sni: bool) {
     if !certificates.is_empty() {
         let mut cert_table = Table::new();
         cert_table.set_titles(row![
-            "Fingerprint SHA256", "CN"
+            "Fingerprint SHA256", "CN", "Alt Names"
         ]);
 
         for cert in certificates {
@@ -366,6 +366,7 @@ fn report_command(server_name: String, nameservers: &[IpAddr], sni: bool) {
             cert_table.add_row(Row::new(vec![
                 Cell::new(&split_fingerprint),
                 Cell::new(&cert.common_name),
+                Cell::new(&cert.alt_names.join("\n"))
             ]));
         }
 
@@ -374,7 +375,7 @@ fn report_command(server_name: String, nameservers: &[IpAddr], sni: bool) {
     }
 
 
-    for ((ip, port), server_response) in server_responses {
+    for ((ip, port), (server_response, conn_info)) in server_responses {
         let val : KeyApiResponse = serde_json::from_slice(&server_response.body).unwrap();
 
         let mut server_table = Table::new();
@@ -410,9 +411,16 @@ fn report_command(server_name: String, nameservers: &[IpAddr], sni: bool) {
         }
 
         for fingerprint in val.tls_fingerprints {
-            server_table.add_row(row![
-                "TLS fingerprint ", &fingerprint.sha256.from_base64().unwrap().to_hex().to_uppercase()
-            ]);
+            let allowed_fingerprint = fingerprint.sha256.from_base64().unwrap();
+            let style = if conn_info.cert_sha256 == allowed_fingerprint {
+                "Fgb"
+            } else {
+                "Frb"
+            };
+            server_table.add_row(Row::new(vec![
+                Cell::new("TLS fingerprint "),
+                Cell::new(&allowed_fingerprint.to_hex().to_uppercase()).style_spec(style)
+            ]));
         }
 
         server_table.set_format(*FORMAT_CLEAN);

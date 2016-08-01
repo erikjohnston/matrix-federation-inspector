@@ -58,6 +58,7 @@ quick_error!{
 pub struct CertificateInfo {
     pub cert_sha256: Vec<u8>,
     pub common_name: String,
+    pub alt_names: Vec<String>,
 }
 
 
@@ -107,6 +108,14 @@ pub fn get_ssl_info(server_name: &str, ipaddr: IpAddr, port: u16, sni: bool)
 
         let common_name = peer_cert.subject_name().text_by_nid(Nid::CN).unwrap().to_string();
 
+        let alt_names = if let Some(gnames) = peer_cert.subject_alt_names() {
+            gnames.into_iter().filter_map(|name| {
+                name.dnsname().map(str::to_string)
+            }).collect()
+        } else {
+            Vec::new()
+        };
+
         ConnectionInfo{
             ip: ipaddr,
             port: port,
@@ -117,6 +126,7 @@ pub fn get_ssl_info(server_name: &str, ipaddr: IpAddr, port: u16, sni: bool)
             cert_info: CertificateInfo{
                 common_name: common_name,
                 cert_sha256: peer_cert.fingerprint(HashType::SHA256).unwrap(),
+                alt_names: alt_names,
             }
         }
     };
