@@ -79,7 +79,7 @@ pub struct ServerResponse {
     pub body: Vec<u8>,
 }
 
-pub fn get_ssl_info(server_name: &str, ipaddr: IpAddr, port: u16)
+pub fn get_ssl_info(server_name: &str, ipaddr: IpAddr, port: u16, sni: bool)
     -> Result<(ConnectionInfo, ServerResponse), SslStreamError>
 {
     let stream = try!(match ipaddr {
@@ -89,7 +89,9 @@ pub fn get_ssl_info(server_name: &str, ipaddr: IpAddr, port: u16)
 
     let ssl_context = try!(SslContext::new(SslMethod::Sslv23));
     let ssl = try!(Ssl::new(&ssl_context));
-    try!(ssl.set_hostname(server_name));
+    if sni {
+        try!(ssl.set_hostname(server_name));
+    }
 
     // hyper requires we wrap the tcp stream in a HttpStream
     let ssl_stream = try!(SslStream::connect(ssl, HttpStream(stream)));
@@ -97,7 +99,11 @@ pub fn get_ssl_info(server_name: &str, ipaddr: IpAddr, port: u16)
     let conn_info = {
         let peer_cert = ssl_stream.ssl().peer_certificate().unwrap();
         let cipher = ssl_stream.ssl().get_current_cipher().unwrap();
-        let server_name = ssl_stream.ssl().get_servername().unwrap();
+        let server_name = if sni {
+             ssl_stream.ssl().get_servername().unwrap()
+         } else {
+             String::new()
+         };
 
         let common_name = peer_cert.subject_name().text_by_nid(Nid::CN).unwrap().to_string();
 

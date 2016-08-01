@@ -242,7 +242,7 @@ fn resolve_command(server_name: String, nameservers: &[IpAddr], output: ResolveO
 }
 
 
-fn report_command(server_name: String, nameservers: &[IpAddr]) {
+fn report_command(server_name: String, nameservers: &[IpAddr], sni: bool) {
     let (srv_results_map, ip_ports) = resolve_matrix_server(server_name.clone(), nameservers);
 
     println!("SRV Records...");
@@ -307,6 +307,7 @@ fn report_command(server_name: String, nameservers: &[IpAddr]) {
             &server_name,
             ip,
             port,
+            sni,
         ) {
             Ok((conn_info, server_response)) => {
                 certificates.insert(conn_info.cert_info.clone());
@@ -429,7 +430,7 @@ enum FetchFormat { Base64, Hex }
 
 fn fetch_command(
     server_name: String, nameservers: &[IpAddr], what_to_fetch: WhatToFetch,
-    format: FetchFormat,
+    format: FetchFormat, sni: bool,
 ) {
     let (_, ip_ports) = resolve_matrix_server(server_name.clone(), nameservers);
 
@@ -443,6 +444,7 @@ fn fetch_command(
             &server_name,
             ip,
             port,
+            sni,
         ) {
             Ok((_, server_response)) => {
                 let val : KeyApiResponse = serde_json::from_slice(&server_response.body).unwrap();
@@ -510,6 +512,7 @@ fn main() {
         .subcommand(SubCommand::with_name("report")
             .about("Generates a full report about a server")
             .arg_from_usage("<server_name>   'Server name to report on'")
+            .arg_from_usage("--sni 'Use SNI when connecting'")
         )
         .subcommand(SubCommand::with_name("resolve")
             .about("Resolves server name to IP/port")
@@ -536,6 +539,7 @@ fn main() {
             .setting(AppSettings::VersionlessSubcommands)
             .setting(AppSettings::SubcommandRequiredElseHelp)
             .arg_from_usage("<server_name>   'Server name to report on'")
+            .arg_from_usage("--sni 'Use SNI when connecting'")
             .arg(Arg::with_name("format")
                 .short("f")
                 .long("format")
@@ -567,8 +571,9 @@ fn main() {
     match matches.subcommand() {
         ("report", Some(submatches)) => {
             let server_name = submatches.value_of("server_name").unwrap().to_string();
+            let sni = submatches.is_present("sni");
 
-            report_command(server_name, &nameservers);
+            report_command(server_name, &nameservers, sni);
         }
         ("resolve", Some(submatches)) => {
             let server_name = submatches.value_of("server_name").unwrap().to_string();
@@ -584,6 +589,7 @@ fn main() {
         }
         ("fetch", Some(submatches)) => {
             let server_name = submatches.value_of("server_name").unwrap().to_string();
+            let sni = submatches.is_present("sni");
 
             let format = match submatches.value_of("format").unwrap() {
                 "base64" => FetchFormat::Base64,
@@ -593,10 +599,10 @@ fn main() {
 
             match submatches.subcommand() {
                 ("certs", Some(_)) => {
-                    fetch_command(server_name, &nameservers, WhatToFetch::Certs, format);
+                    fetch_command(server_name, &nameservers, WhatToFetch::Certs, format, sni);
                 }
                 ("keys", Some(_)) => {
-                    fetch_command(server_name, &nameservers, WhatToFetch::Keys, format);
+                    fetch_command(server_name, &nameservers, WhatToFetch::Keys, format, sni);
                 }
                 _ => panic!("Unrecognized subcommand.")
             }
