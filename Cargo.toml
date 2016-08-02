@@ -4,11 +4,11 @@ name = "mxfedtest"
 version = "0.1.0"
 
 [dependencies]
-ansi_term = "0.7.2"
+ansi_term = "0.8.0"
 chrono = "0.2.19"
 clap = "2.1.2"
 dns-parser = "0.3.1"
-hyper = "0.8.0"
+hyper = "0.9.0"
 itertools = "0.4.13"
 marksman_escape = "0.1.2"
 openssl = "0.7.7"
@@ -17,10 +17,10 @@ quick-error = "1.0.0"
 rand = "0.3.14"
 resolv-conf = "0.4.0"
 rustc-serialize = "0.3.18"
-serde = "0.7.0"
-serde_json = "0.7.0"
-serde_macros = "0.7.0"
+serde = "0.8.0"
+serde_json = "0.8.0"
+serde_macros = "0.8.0"
 
 [dependencies.toml]
 features = ["serde"]
-version = "0.1.28"
+version = "0.2.0"
