@@ -35,6 +35,15 @@ use rustc_serialize::hex::ToHex;
 use rustc_serialize::base64::FromBase64;
 
 
+fn bool_to_spec(b: bool) -> &'static str {
+    if b {
+        "Fgb"
+    } else {
+        "Frb"
+    }
+}
+
+
 fn print_table<'a, 'b, C, Q, T, E, F>(collection: C, header: Row, mut func: F)
     where C: IntoIterator<Item=(Q, &'a Result<T, E>)>,
           E: Error + 'a,
@@ -376,8 +385,6 @@ fn report_command(server_name: String, nameservers: &[IpAddr], sni: bool) {
 
 
     for ((ip, port), (server_response, conn_info)) in server_responses {
-        let val : KeyApiResponse = serde_json::from_slice(&server_response.body).unwrap();
-
         let mut server_table = Table::new();
 
         server_table.add_row(row![
@@ -387,9 +394,26 @@ fn report_command(server_name: String, nameservers: &[IpAddr], sni: bool) {
             }
         ]);
 
-        server_table.add_row(row![
-            "Server Name ", &val.server_name
-        ]);
+        let val : KeyApiResponse = match serde_json::from_slice(&server_response.body) {
+            Ok(v) => v,
+            Err(e) => {
+                server_table.add_row(Row::new(vec![
+                    Cell::new("Invalid response "),
+                    Cell::new(&format!("{}", e)).style_spec("Frb")
+                ]));
+
+                server_table.set_format(*FORMAT_CLEAN);
+                server_table.printstd();
+                println!("");
+
+                continue;
+            },
+        };
+
+        server_table.add_row(Row::new(vec![
+            Cell::new("Server Name "),
+            Cell::new(&val.server_name).style_spec(bool_to_spec(val.server_name == server_name))
+        ]));
 
         let vu = val.valid_until_ts;
         let date = NaiveDateTime::from_timestamp(
@@ -412,14 +436,11 @@ fn report_command(server_name: String, nameservers: &[IpAddr], sni: bool) {
 
         for fingerprint in val.tls_fingerprints {
             let allowed_fingerprint = fingerprint.sha256.from_base64().unwrap();
-            let style = if conn_info.cert_sha256 == allowed_fingerprint {
-                "Fgb"
-            } else {
-                "Frb"
-            };
             server_table.add_row(Row::new(vec![
                 Cell::new("TLS fingerprint "),
-                Cell::new(&allowed_fingerprint.to_hex().to_uppercase()).style_spec(style)
+                Cell::new(
+                        &allowed_fingerprint.to_hex().to_uppercase()
+                ).style_spec(bool_to_spec(conn_info.cert_sha256 == allowed_fingerprint))
             ]));
         }
 
@@ -455,7 +476,13 @@ fn fetch_command(
             sni,
         ) {
             Ok((_, server_response)) => {
-                let val : KeyApiResponse = serde_json::from_slice(&server_response.body).unwrap();
+                let val : KeyApiResponse = match serde_json::from_slice(&server_response.body) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        writeln!(stderr(), "Invalid server response from {} {}, {}", ip, port, e).unwrap();
+                        continue;
+                    },
+                };
 
                 match what_to_fetch {
                     WhatToFetch::Certs => {

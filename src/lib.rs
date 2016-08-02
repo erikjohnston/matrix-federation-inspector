@@ -20,9 +20,8 @@ extern crate serde_json;
 pub mod resolver;
 
 use std::collections::BTreeMap;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::net::{IpAddr, TcpStream};
-use std::error::Error;
 
 use openssl::ssl::{SslContext, SslStream, SslMethod, Ssl};
 use openssl::ssl::error::SslError;
@@ -41,6 +40,14 @@ use itertools::Itertools;
 
 quick_error!{
     #[derive(Debug)]
+    pub enum MissingPeerSslInfoError {
+        PeerCert
+        CurrentCipher
+    }
+}
+
+quick_error!{
+    #[derive(Debug)]
     pub enum SslStreamError {
         Io(err: std::io::Error) {
             from()
@@ -51,6 +58,14 @@ quick_error!{
             from()
             description(err.description())
         }
+        BadPeer(err: MissingPeerSslInfoError) {
+            from()
+        }
+        HttpError(err: hyper::Error) {
+            from()
+            description(err.description())
+        }
+        InvalidUrl
     }
 }
 
@@ -98,15 +113,14 @@ pub fn get_ssl_info(server_name: &str, ipaddr: IpAddr, port: u16, sni: bool)
     let ssl_stream = try!(SslStream::connect(ssl, HttpStream(stream)));
 
     let conn_info = {
-        let peer_cert = ssl_stream.ssl().peer_certificate().unwrap();
-        let cipher = ssl_stream.ssl().get_current_cipher().unwrap();
-        let server_name = if sni {
-             ssl_stream.ssl().get_servername().unwrap()
-         } else {
-             String::new()
-         };
+        let peer_cert = try!(ssl_stream.ssl().peer_certificate().ok_or(MissingPeerSslInfoError::PeerCert));
+        let cipher = try!(ssl_stream.ssl().get_current_cipher().ok_or(MissingPeerSslInfoError::CurrentCipher));
+        let server_name = ssl_stream.ssl().get_servername().unwrap_or_default();
 
-        let common_name = peer_cert.subject_name().text_by_nid(Nid::CN).unwrap().to_string();
+        let common_name = peer_cert.subject_name()
+                                   .text_by_nid(Nid::CN)
+                                   .expect("Expected cert to have a CN")
+                                   .to_string();
 
         let alt_names = if let Some(gnames) = peer_cert.subject_alt_names() {
             gnames.into_iter().filter_map(|name| {
@@ -125,7 +139,7 @@ pub fn get_ssl_info(server_name: &str, ipaddr: IpAddr, port: u16, sni: bool)
             server_name: server_name,
             cert_info: CertificateInfo{
                 common_name: common_name,
-                cert_sha256: peer_cert.fingerprint(HashType::SHA256).unwrap(),
+                cert_sha256: peer_cert.fingerprint(HashType::SHA256).unwrap_or_default(),
                 alt_names: alt_names,
             }
         }
@@ -139,18 +153,20 @@ pub fn get_ssl_info(server_name: &str, ipaddr: IpAddr, port: u16, sni: bool)
         port: None,
     });
 
-    let url = format!("https://{}/_matrix/key/v2/server/", server_name).parse().unwrap();
+    let url = try!(
+        format!("https://{}/_matrix/key/v2/server/", server_name).parse().map_err(|_| SslStreamError::InvalidUrl)
+    );
 
-    msg.set_outgoing(RequestHead{
+    try!(msg.set_outgoing(RequestHead {
         headers: headers,
         method: Method::Get,
         url: url,
-    }).unwrap();
+    }));
 
-    let resp_headers = msg.get_incoming().unwrap();
+    let resp_headers = try!(msg.get_incoming());
 
     let mut body = Vec::new();
-    msg.read_to_end(&mut body).unwrap();
+    try!(msg.read_to_end(&mut body));
 
     let server_response = ServerResponse {
         status_code: resp_headers.raw_status,
