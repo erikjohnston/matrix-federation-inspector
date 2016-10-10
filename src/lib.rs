@@ -1,6 +1,4 @@
-#![feature(custom_derive, plugin)]
-#![plugin(serde_macros)]
-
+#![feature(proc_macro, custom_derive)]
 
 extern crate ansi_term;
 extern crate chrono;
@@ -16,6 +14,7 @@ extern crate serde;
 extern crate serde_json;
 #[macro_use] extern crate quick_error;
 #[macro_use] extern crate prettytable;
+#[macro_use] extern crate serde_derive;
 
 pub mod resolver;
 

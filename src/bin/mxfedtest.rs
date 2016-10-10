@@ -1,3 +1,5 @@
+#![feature(proc_macro, custom_derive)]
+
 #[macro_use] extern crate clap;
 extern crate chrono;
 extern crate mxfedtest;
