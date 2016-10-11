@@ -35,7 +35,10 @@ use itertools::Itertools;
 
 use rustc_serialize::hex::ToHex;
 use rustc_serialize::base64::FromBase64;
+use rustc_serialize::base64::ToBase64;
 
+use serde_json::builder::ObjectBuilder;
+use serde_json::builder::ArrayBuilder;
 
 fn bool_to_spec(b: bool) -> &'static str {
     if b {
@@ -453,6 +456,86 @@ fn report_command(server_name: String, nameservers: &[IpAddr], sni: bool) {
 }
 
 
+fn report_json_command(server_name: String, nameservers: &[IpAddr], sni: bool) {
+    let (srv_results_map, ip_ports) = resolve_matrix_server(server_name.clone(), nameservers);
+
+    let mut report = ObjectBuilder::new();
+
+    let mut srv_report = ObjectBuilder::new();
+    for (query, srv_results) in &srv_results_map.srv_map {
+        match *srv_results {
+            Ok(ref results) => {
+                srv_report = srv_report.insert(query.clone(), results);
+            },
+            Err(_) => {} // TODO: report the errors rather than ignoring them.
+        }
+    }
+    report = report.insert("srv_records", srv_report.build());
+
+    let mut host_report = ObjectBuilder::new();
+    for (query, host_results) in &srv_results_map.host_map {
+        match *host_results {
+            Ok(ref results) => {
+                let mut result_array = ArrayBuilder::new();
+                for result in results.iter() {
+                    result_array = result_array.push(match *result {
+                        resolver::HostResult::CNAME(ref target) => target.clone(),
+                        resolver::HostResult::IP(IpAddr::V4(ref ip)) => format!("{}", ip),
+                        resolver::HostResult::IP(IpAddr::V6(ref ip)) => format!("[{}]", ip)
+                    })
+                }
+                host_report = host_report.insert(query.clone(), result_array.build());
+            },
+            Err(_) => {} // TODO: report the errors rather than ignoring them.
+        }
+    }
+    report = report.insert("hosts", host_report.build());
+
+    if ip_ports.is_empty() {
+        writeln!(stderr(), "Failed to resolve host.").unwrap();
+        std::process::exit(1);
+    }
+
+    let mut connection_report = ObjectBuilder::new();
+    for (_, _, port, ip) in ip_ports {
+        match get_ssl_info(&server_name, ip, port, sni) {
+            Ok((conn_info, server_response)) => {
+                let response : KeyApiResponse = match serde_json::from_slice(&server_response.body) {
+                    Ok(r) => r,
+                    Err(_) => continue, // TODO: report the errors rather than ignoring them.
+                };
+                let ip_port = match ip {
+                    IpAddr::V4(ref ipv4) => format!("{}:{}", ipv4, port),
+                    IpAddr::V6(ref ipv6) => format!("[{}]:{}", ipv6, port),
+                };
+                connection_report = connection_report.insert_object(ip_port, |builder| builder
+                    .insert_object("cipher", |builder| builder
+                        .insert("version", conn_info.cipher_version)
+                        .insert("name", conn_info.cipher_name)
+                        .insert("bits", conn_info.cipher_bits)
+                    )
+                    .insert_object("certificate", |builder| builder
+                        .insert("fingerprint", conn_info.cert_info.cert_sha256.to_base64(
+                            rustc_serialize::base64::Config{
+                                char_set: rustc_serialize::base64::Standard,
+                                newline: rustc_serialize::base64::Newline::CRLF,
+                                pad: false,
+                                line_length: None,
+                            },
+                        ))
+                        .insert("common_name", &conn_info.cert_info.common_name)
+                        .insert("alt_names", &conn_info.cert_info.alt_names)
+                    )
+                    .insert("response", response)
+                );
+            }
+            Err(_) => {} // TODO: report the errors rather than ignoring them.
+        }
+    }
+    report = report.insert("connections", connection_report.build());
+
+    println!("{}", report.build())
+}
 
 enum WhatToFetch { Certs, Keys }
 
@@ -550,6 +633,7 @@ fn main() {
             .about("Generates a full report about a server")
             .arg_from_usage("<server_name>   'Server name to report on'")
             .arg_from_usage("--sni 'Use SNI when connecting'")
+            .arg_from_usage("--json 'Output JSON'")
         )
         .subcommand(SubCommand::with_name("resolve")
             .about("Resolves server name to IP/port")
@@ -609,8 +693,13 @@ fn main() {
         ("report", Some(submatches)) => {
             let server_name = submatches.value_of("server_name").unwrap().to_string();
             let sni = submatches.is_present("sni");
+            let json = submatches.is_present("json");
 
-            report_command(server_name, &nameservers, sni);
+            if json {
+                report_json_command(server_name, &nameservers, sni);
+            } else {
+                report_command(server_name, &nameservers, sni);
+            }
         }
         ("resolve", Some(submatches)) => {
             let server_name = submatches.value_of("server_name").unwrap().to_string();
