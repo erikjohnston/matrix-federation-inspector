@@ -465,18 +465,9 @@ fn report_json_command(server_name: String, nameservers: &[IpAddr], sni: bool) {
     for (query, srv_results) in &srv_results_map.srv_map {
         match *srv_results {
             Ok(ref results) => {
-                let mut result_array = ArrayBuilder::new();
-                for result in results.iter() {
-                    result_array = result_array.push_object(|builder| builder
-                        .insert("priority", result.priority)
-                        .insert("weight", result.weight)
-                        .insert("port", result.port)
-                        .insert("target", result.target.clone())
-                    );
-                }
-                srv_report = srv_report.insert(query.clone(), result_array.build());
+                srv_report = srv_report.insert(query.clone(), results);
             },
-            Err(_) => {;} // TODO: report the errors rather than ignoring them.
+            Err(_) => {} // TODO: report the errors rather than ignoring them.
         }
     }
     report = report.insert("srv_records", srv_report.build());
@@ -487,15 +478,15 @@ fn report_json_command(server_name: String, nameservers: &[IpAddr], sni: bool) {
             Ok(ref results) => {
                 let mut result_array = ArrayBuilder::new();
                 for result in results.iter() {
-                    result_array = match *result {
-                        resolver::HostResult::CNAME(ref target) => result_array.push(target),
-                        resolver::HostResult::IP(IpAddr::V4(ref ip)) => result_array.push(&format!("{}", ip)),
-                        resolver::HostResult::IP(IpAddr::V6(ref ip)) => result_array.push(&format!("[{}]", ip))
-                    }
+                    result_array = result_array.push(match *result {
+                        resolver::HostResult::CNAME(ref target) => target.clone(),
+                        resolver::HostResult::IP(IpAddr::V4(ref ip)) => format!("{}", ip),
+                        resolver::HostResult::IP(IpAddr::V6(ref ip)) => format!("[{}]", ip)
+                    })
                 }
                 host_report = host_report.insert(query.clone(), result_array.build());
             },
-            Err(_) => {;} // TODO: report the errors rather than ignoring them.
+            Err(_) => {} // TODO: report the errors rather than ignoring them.
         }
     }
     report = report.insert("hosts", host_report.build());
@@ -532,13 +523,13 @@ fn report_json_command(server_name: String, nameservers: &[IpAddr], sni: bool) {
                                 line_length: None,
                             },
                         ))
-                        .insert("common_name", conn_info.cert_info.common_name.clone())
-                        .insert("alt_names", conn_info.cert_info.alt_names.clone())
+                        .insert("common_name", &conn_info.cert_info.common_name)
+                        .insert("alt_names", &conn_info.cert_info.alt_names)
                     )
                     .insert("response", response)
                 );
             }
-            Err(_) => {;} // TODO: report the errors rather than ignoring them.
+            Err(_) => {} // TODO: report the errors rather than ignoring them.
         }
     }
     report = report.insert("connections", connection_report.build());

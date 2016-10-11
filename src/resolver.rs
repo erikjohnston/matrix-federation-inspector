@@ -53,7 +53,7 @@ impl ResolveError {
 }
 
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct SrvResult {
     pub priority: u16,
     pub weight: u16,
