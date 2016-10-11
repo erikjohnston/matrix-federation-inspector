@@ -224,17 +224,17 @@ pub fn resolve_matrix_server(server_name: String, nameservers: &[IpAddr])
     (srv_results_map, ip_ports)
 }
 
-#[derive(Debug, Clone, Deserialize, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Serialize, Deserialize, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct TlsFingerprint {
     pub sha256: String
 }
 
-#[derive(Debug, Clone, Deserialize, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Serialize, Deserialize, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct VerifyKey {
     pub key: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Serialize, Deserialize, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct KeyApiResponse {
     pub server_name: String,
     pub valid_until_ts: u64,
