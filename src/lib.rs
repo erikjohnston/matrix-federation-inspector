@@ -1,8 +1,5 @@
 #![feature(proc_macro, custom_derive)]
 
-extern crate ansi_term;
-extern crate chrono;
-#[macro_use] extern crate clap;
 extern crate dns_parser;
 extern crate itertools;
 extern crate hyper;
@@ -13,7 +10,6 @@ extern crate rustc_serialize;
 extern crate serde;
 extern crate serde_json;
 #[macro_use] extern crate quick_error;
-#[macro_use] extern crate prettytable;
 #[macro_use] extern crate serde_derive;
 
 pub mod resolver;
