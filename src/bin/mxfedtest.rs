@@ -5,7 +5,7 @@ extern crate chrono;
 extern crate mxfedtest;
 extern crate resolv_conf;
 #[macro_use] extern crate prettytable;
-extern crate serde_json;
+#[macro_use] extern crate serde_json;
 extern crate itertools;
 extern crate rustc_serialize;
 
@@ -37,8 +37,6 @@ use rustc_serialize::hex::ToHex;
 use rustc_serialize::base64::FromBase64;
 use rustc_serialize::base64::ToBase64;
 
-use serde_json::builder::ObjectBuilder;
-use serde_json::builder::ArrayBuilder;
 
 fn bool_to_spec(b: bool) -> &'static str {
     if b {
@@ -94,7 +92,7 @@ fn print_table<'a, 'b, C, Q, T, E, F>(collection: C, header: Row, mut func: F)
 #[derive(Debug, Clone, Copy)]
 enum ResolveOutput { Simple, Full, Graph }
 
-fn resolve_command(server_name: String, nameservers: &[IpAddr], output: ResolveOutput) {
+fn resolve_command(server_name: &str, nameservers: &[IpAddr], output: ResolveOutput) {
     let (srv_results_map, ip_ports) = resolve_matrix_server(server_name, nameservers);
 
     match output {
@@ -123,7 +121,7 @@ fn resolve_command(server_name: String, nameservers: &[IpAddr], output: ResolveO
                     Ok(ref srv_results) => {
                         for srv_result in srv_results {
                             success_table.add_row(Row::new(vec![
-                                Cell::new(&query),
+                                Cell::new(query),
                                 Cell::new(&srv_result.priority.to_string()),
                                 Cell::new(&srv_result.weight.to_string()),
                                 Cell::new(&srv_result.port.to_string()),
@@ -133,7 +131,7 @@ fn resolve_command(server_name: String, nameservers: &[IpAddr], output: ResolveO
                     }
                     Err(ref e) => {
                         failure_table.add_row(Row::new(vec![
-                            Cell::new(&query).style_spec("Fr"),
+                            Cell::new(query).style_spec("Fr"),
                             Cell::new(&format!("{}", e))
                         ]));
                     }
@@ -147,16 +145,16 @@ fn resolve_command(server_name: String, nameservers: &[IpAddr], output: ResolveO
                             success_table.add_row(match *host_result {
                                 resolver::HostResult::CNAME(ref target) => {
                                     Row::new(vec![
-                                        Cell::new(&query),
+                                        Cell::new(query),
                                         Cell::new(""),
                                         Cell::new(""),
                                         Cell::new(""),
-                                        Cell::new(&target),
+                                        Cell::new(target),
                                     ])
                                 }
                                 resolver::HostResult::IP(ref ip) => {
                                     Row::new(vec![
-                                        Cell::new(&query),
+                                        Cell::new(query),
                                         Cell::new(""),
                                         Cell::new(""),
                                         Cell::new(""),
@@ -168,7 +166,7 @@ fn resolve_command(server_name: String, nameservers: &[IpAddr], output: ResolveO
                     }
                     Err(ref e) => {
                         failure_table.add_row(Row::new(vec![
-                            Cell::new(&query).style_spec("Fr"),
+                            Cell::new(query).style_spec("Fr"),
                             Cell::new(&format!("{}", e))
                         ]));
                     }
@@ -257,7 +255,7 @@ fn resolve_command(server_name: String, nameservers: &[IpAddr], output: ResolveO
 
 
 fn report_command(server_name: String, nameservers: &[IpAddr], sni: bool) {
-    let (srv_results_map, ip_ports) = resolve_matrix_server(server_name.clone(), nameservers);
+    let (srv_results_map, ip_ports) = resolve_matrix_server(&server_name, nameservers);
 
     println!("SRV Records...");
 
@@ -265,7 +263,7 @@ fn report_command(server_name: String, nameservers: &[IpAddr], sni: bool) {
         &srv_results_map.srv_map,
         row!["Query", "Priority", "Weight", "Port", "Target"],
         |query, srv_results| srv_results.iter().map(|srv_result| Row::new(vec![
-            Cell::new(&query),
+            Cell::new(query),
             Cell::new(&srv_result.priority.to_string()),
             Cell::new(&srv_result.weight.to_string()),
             Cell::new(&srv_result.port.to_string()),
@@ -281,13 +279,13 @@ fn report_command(server_name: String, nameservers: &[IpAddr], sni: bool) {
         |query, host_results| host_results.iter().map(|host_result| match *host_result {
             resolver::HostResult::CNAME(ref target) => {
                 Row::new(vec![
-                    Cell::new(&query),
-                    Cell::new(&target),
+                    Cell::new(query),
+                    Cell::new(target),
                 ])
             }
             resolver::HostResult::IP(ref ip) => {
                 Row::new(vec![
-                    Cell::new(&query),
+                    Cell::new(query),
                     Cell::new(&format!("{}", ip)),
                 ])
             }
@@ -336,8 +334,8 @@ fn report_command(server_name: String, nameservers: &[IpAddr], sni: bool) {
                     Cell::new(&conn_info.port.to_string()),
                     Cell::new(&conn_info.server_name),
                     Cell::new(&split_fingerprint),
-                    Cell::new(conn_info.cipher_name),
-                    Cell::new(conn_info.cipher_version),
+                    Cell::new(&conn_info.cipher_name),
+                    Cell::new(&conn_info.cipher_version),
                     Cell::new(&conn_info.cipher_bits.to_string()),
                 ]));
 
@@ -457,46 +455,42 @@ fn report_command(server_name: String, nameservers: &[IpAddr], sni: bool) {
 
 
 fn report_json_command(server_name: String, nameservers: &[IpAddr], sni: bool) {
-    let (srv_results_map, ip_ports) = resolve_matrix_server(server_name.clone(), nameservers);
+    let (srv_results_map, ip_ports) = resolve_matrix_server(&server_name, nameservers);
 
-    let mut report = ObjectBuilder::new();
-
-    let mut srv_report = ObjectBuilder::new();
+    let mut srv_report = json!({});
     for (query, srv_results) in &srv_results_map.srv_map {
         match *srv_results {
             Ok(ref results) => {
-                srv_report = srv_report.insert(query.clone(), results);
+                srv_report[query] = results.into_iter().map(|r| serde_json::to_value(r).unwrap()).collect();
             },
             Err(_) => {} // TODO: report the errors rather than ignoring them.
         }
     }
-    report = report.insert("srv_records", srv_report.build());
 
-    let mut host_report = ObjectBuilder::new();
+    let mut host_report = json!({});
     for (query, host_results) in &srv_results_map.host_map {
         match *host_results {
             Ok(ref results) => {
-                let mut result_array = ArrayBuilder::new();
+                let mut result_array = Vec::new();
                 for result in results.iter() {
-                    result_array = result_array.push(match *result {
+                    result_array.push(match *result {
                         resolver::HostResult::CNAME(ref target) => target.clone(),
                         resolver::HostResult::IP(IpAddr::V4(ref ip)) => format!("{}", ip),
                         resolver::HostResult::IP(IpAddr::V6(ref ip)) => format!("[{}]", ip)
-                    })
+                    });
                 }
-                host_report = host_report.insert(query.clone(), result_array.build());
+                host_report[query] = result_array.into();
             },
             Err(_) => {} // TODO: report the errors rather than ignoring them.
         }
     }
-    report = report.insert("hosts", host_report.build());
 
     if ip_ports.is_empty() {
         writeln!(stderr(), "Failed to resolve host.").unwrap();
         std::process::exit(1);
     }
 
-    let mut connection_report = ObjectBuilder::new();
+    let mut connection_report = json!({});
     for (_, _, port, ip) in ip_ports {
         match get_ssl_info(&server_name, ip, port, sni) {
             Ok((conn_info, server_response)) => {
@@ -508,33 +502,39 @@ fn report_json_command(server_name: String, nameservers: &[IpAddr], sni: bool) {
                     IpAddr::V4(ref ipv4) => format!("{}:{}", ipv4, port),
                     IpAddr::V6(ref ipv6) => format!("[{}]:{}", ipv6, port),
                 };
-                connection_report = connection_report.insert_object(ip_port, |builder| builder
-                    .insert_object("cipher", |builder| builder
-                        .insert("version", conn_info.cipher_version)
-                        .insert("name", conn_info.cipher_name)
-                        .insert("bits", conn_info.cipher_bits)
-                    )
-                    .insert_object("certificate", |builder| builder
-                        .insert("fingerprint", conn_info.cert_info.cert_sha256.to_base64(
+
+                connection_report[ip_port] = json!({
+                    "cipher": {
+                        "version": conn_info.cipher_version,
+                        "name": conn_info.cipher_name,
+                        "bits": conn_info.cipher_bits
+                    },
+                    "certificate": {
+                        "fingerprint": conn_info.cert_info.cert_sha256.to_base64(
                             rustc_serialize::base64::Config{
                                 char_set: rustc_serialize::base64::Standard,
                                 newline: rustc_serialize::base64::Newline::CRLF,
                                 pad: false,
                                 line_length: None,
                             },
-                        ))
-                        .insert("common_name", &conn_info.cert_info.common_name)
-                        .insert("alt_names", &conn_info.cert_info.alt_names)
-                    )
-                    .insert("response", response)
-                );
+                        ),
+                        "common_name": &conn_info.cert_info.common_name,
+                        "alt_names": &conn_info.cert_info.alt_names
+                    },
+                    "response": response
+                })
             }
             Err(_) => {} // TODO: report the errors rather than ignoring them.
         }
     }
-    report = report.insert("connections", connection_report.build());
 
-    println!("{}", report.build())
+    let report = json!({
+        "srv_records": srv_report,
+        "hosts": host_report,
+        "connections": connection_report
+    });
+
+    println!("{}", report)
 }
 
 enum WhatToFetch { Certs, Keys }
@@ -546,7 +546,7 @@ fn fetch_command(
     server_name: String, nameservers: &[IpAddr], what_to_fetch: WhatToFetch,
     format: FetchFormat, sni: bool,
 ) {
-    let (_, ip_ports) = resolve_matrix_server(server_name.clone(), nameservers);
+    let (_, ip_ports) = resolve_matrix_server(&server_name, nameservers);
 
     if ip_ports.is_empty() {
         writeln!(stderr(), "Failed to resolve host.").unwrap();
@@ -711,7 +711,7 @@ fn main() {
                 ResolveOutput::Simple
             };
 
-            resolve_command(server_name, &nameservers, resolve_output);
+            resolve_command(&server_name, &nameservers, resolve_output);
         }
         ("fetch", Some(submatches)) => {
             let server_name = submatches.value_of("server_name").unwrap().to_string();

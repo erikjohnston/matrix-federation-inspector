@@ -3,6 +3,7 @@
 extern crate dns_parser;
 extern crate itertools;
 extern crate hyper;
+extern crate hyper_openssl;
 extern crate openssl;
 extern crate rand;
 extern crate resolv_conf;
@@ -18,15 +19,16 @@ use std::collections::BTreeMap;
 use std::io::Read;
 use std::net::{IpAddr, TcpStream};
 
-use openssl::ssl::{SslContext, SslStream, SslMethod, Ssl};
-use openssl::ssl::error::SslError;
-use openssl::crypto::hash::Type as HashType;
-use openssl::nid::Nid;
+use openssl::ssl::{SslContext, SslMethod, Ssl, SslConnectorBuilder, HandshakeError};
+use openssl::error::ErrorStack as SslErrorStack;
+use openssl::hash::MessageDigest;
+use openssl::nid;
 
 use hyper::http::RawStatus;
 use hyper::http::h1::Http11Message;
 use hyper::http::message::{HttpMessage, RequestHead};
 use hyper::net::HttpStream;
+use hyper::net::HttpsStream;
 use hyper::header::{Host, Headers, Server};
 use hyper::method::Method;
 
@@ -49,7 +51,7 @@ quick_error!{
             description(err.description())
             display("I/O error: {}", err)
         }
-        Ssl(err: SslError) {
+        Ssl(err: SslErrorStack) {
             from()
             description(err.description())
         }
@@ -57,6 +59,10 @@ quick_error!{
             from()
         }
         HttpError(err: hyper::Error) {
+            from()
+            description(err.description())
+        }
+        SslHandshakeError(err: HandshakeError<HttpStream>) {
             from()
             description(err.description())
         }
@@ -77,8 +83,8 @@ pub struct ConnectionInfo {
     pub ip: IpAddr,
     pub port: u16,
     pub server_name: String,
-    pub cipher_name: &'static str,
-    pub cipher_version: &'static str,
+    pub cipher_name: String,
+    pub cipher_version: String,
     pub cipher_bits: i32,
     pub cert_info: CertificateInfo,
 }
@@ -98,23 +104,29 @@ pub fn get_ssl_info(server_name: &str, ipaddr: IpAddr, port: u16, sni: bool)
         IpAddr::V6(ip) => TcpStream::connect((ip, port)),
     });
 
-    let ssl_context = try!(SslContext::new(SslMethod::Sslv23));
-    let ssl = try!(Ssl::new(&ssl_context));
+    let ssl_context = try!(SslContext::builder(SslMethod::tls())).build();
+    let mut ssl = try!(Ssl::new(&ssl_context));
     if sni {
         try!(ssl.set_hostname(server_name));
     }
 
+    let connector = try!(SslConnectorBuilder::new(SslMethod::tls())).build();
+
     // hyper requires we wrap the tcp stream in a HttpStream
-    let ssl_stream = try!(SslStream::connect(ssl, HttpStream(stream)));
+    let ssl_stream = try!(connector.connect(server_name, HttpStream(stream)));
 
     let conn_info = {
         let peer_cert = try!(ssl_stream.ssl().peer_certificate().ok_or(MissingPeerSslInfoError::PeerCert));
-        let cipher = try!(ssl_stream.ssl().get_current_cipher().ok_or(MissingPeerSslInfoError::CurrentCipher));
-        let server_name = ssl_stream.ssl().get_servername().unwrap_or_default();
+        let cipher = try!(ssl_stream.ssl().current_cipher().ok_or(MissingPeerSslInfoError::CurrentCipher));
+        let server_name = ssl_stream.ssl().servername().unwrap_or_default().to_string();
 
         let common_name = peer_cert.subject_name()
-                                   .text_by_nid(Nid::CN)
+                                   .entries_by_nid(nid::COMMONNAME)
+                                   .next()
                                    .expect("Expected cert to have a CN")
+                                   .data()
+                                   .as_utf8()
+                                   .expect("Expected cert to have utf8 CN")
                                    .to_string();
 
         let alt_names = if let Some(gnames) = peer_cert.subject_alt_names() {
@@ -128,19 +140,20 @@ pub fn get_ssl_info(server_name: &str, ipaddr: IpAddr, port: u16, sni: bool)
         ConnectionInfo{
             ip: ipaddr,
             port: port,
-            cipher_name: cipher.name(),
-            cipher_version: ssl_stream.ssl().version(),
+            cipher_name: cipher.name().into(),
+            cipher_version: ssl_stream.ssl().version().into(),
             cipher_bits: cipher.bits().secret,
             server_name: server_name,
             cert_info: CertificateInfo{
                 common_name: common_name,
-                cert_sha256: peer_cert.fingerprint(HashType::SHA256).unwrap_or_default(),
+                cert_sha256: peer_cert.fingerprint(MessageDigest::sha256()).unwrap_or_default(),
                 alt_names: alt_names,
             }
         }
     };
 
-    let mut msg = Http11Message::with_stream(Box::new(ssl_stream));
+    let hyper_ssl_stream: hyper_openssl::SslStream<_> = ssl_stream.into();
+    let mut msg = Http11Message::with_stream(Box::new(HttpsStream::Https(hyper_ssl_stream)));
 
     let mut headers = Headers::new();
     headers.set(Host{
@@ -173,10 +186,10 @@ pub fn get_ssl_info(server_name: &str, ipaddr: IpAddr, port: u16, sni: bool)
 }
 
 
-pub fn resolve_matrix_server(server_name: String, nameservers: &[IpAddr])
+pub fn resolve_matrix_server(server_name: &str, nameservers: &[IpAddr])
     -> (resolver::ResolveResultMap, Vec<(u16, u16, u16, IpAddr)>)
 {
-    let srv_name = "_matrix._tcp.".to_string() + &server_name;
+    let srv_name = "_matrix._tcp.".to_string() + server_name;
 
     let mut srv_results_map = resolver::resolve(
         &nameservers[0],
@@ -192,10 +205,10 @@ pub fn resolve_matrix_server(server_name: String, nameservers: &[IpAddr])
     let ip_ports = if was_soa_response {
         srv_results_map = resolver::resolve(
             &nameservers[0],
-            resolver::ResolveRequestType::Host, server_name.clone()
+            resolver::ResolveRequestType::Host, server_name.to_string()
         );
 
-        let ips = resolver::resolve_target_to_ips(&server_name, &srv_results_map);
+        let ips = resolver::resolve_target_to_ips(server_name, &srv_results_map);
 
         ips.into_iter().map(|ip| (0, 0, 8448, ip)).collect_vec()
     } else {
